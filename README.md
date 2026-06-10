@@ -7,7 +7,8 @@ Ce document couvre la mise en place d'une stack de streaming distribuée avec Ap
 Tout l'environnement tourne dans des conteneurs Docker orchestrés par Docker Compose.
 
 ---
-
+![alt text](image-1.png)
+![alt text](image.png)
 ## Structure du projet
 
 ```
