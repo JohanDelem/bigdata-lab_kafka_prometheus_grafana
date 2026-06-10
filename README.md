@@ -1,4 +1,4 @@
-# Lab BigData — Stack Kafka + Observabilité + Base SIEM
+# Lab BigData — Stack Kafka + Observabilité + Base SIEM & Analyse SOC
 
 ## Contexte
 
@@ -20,13 +20,16 @@ bigdata-lab_kafka_prometheus_grafana/
 │   │   └── kafka-jmx.yml
 │   ├── prometheus/
 │   │   └── prometheus.yml
+│   ├── kafka-ui/
+│   │   └── config.yml
 │   └── grafana/
 │       └── provisioning/
 │           ├── datasources/
 │           │   └── datasource.yml
 │           └── dashboards/
 │               ├── dashboards.yml
-│               └── kafka-overview.json
+│               ├── kafka-overview.json
+│               └── soc-overview.json
 ├── tp/
 │   ├── 00_setup.sh
 │   ├── 01_producer.py
@@ -34,17 +37,13 @@ bigdata-lab_kafka_prometheus_grafana/
 │   ├── 03_processor.py
 │   ├── 04_sink_sqlite.py
 │   └── 05_query.py
-├── log/
-│   ├── access.log
-│   ├── 10_log_producer.py
-│   ├── 11_log_processor.py
-│   ├── 12_log_query.py
-│   ├── 13_live_generator.py
-│   └── 14_alert_consumer.py
-└── monitoring/
-    ├── ...
-    └── kafka-ui/
-        └── config.yml
+└── log/
+    ├── access.log
+    ├── 10_log_producer.py
+    ├── 11_log_processor.py
+    ├── 12_log_query.py
+    ├── 13_live_generator.py
+    └── 14_alert_consumer.py
 ```
 
 ---
@@ -832,9 +831,95 @@ INFO: Dynamic config loaded from /etc/kafkaui/dynamic_config.yaml
 
 ---
 
-## 13. Bugs rencontrés et leçons apprises
+## 13. Dashboard Grafana SOC (monitoring/grafana/)
 
-### 13.1 KAFKA_OPTS hérité dans docker exec
+### 13.1 Contexte
+
+Le dashboard `SOC — Détection Sécurité` visualise en temps réel les métriques du pipeline de sécurité directement depuis le Kafka Exporter via Prometheus. Il ne nécessite aucun code supplémentaire — il exploite les métriques déjà exposées par l'infrastructure existante.
+
+Accessible sur : `http://localhost:3000` > Dashboards > Kafka > SOC — Détection Sécurité
+
+### 13.2 Panels et métriques
+
+Le dashboard contient 8 panels organisés en 3 lignes :
+
+**Ligne 1 — Stats instantanées**
+
+| Panel | Métrique Prometheus | Signification |
+|---|---|---|
+| Alertes publiées (total) | `sum(kafka_topic_partition_current_offset{topic="security-alerts"})` | Nombre total d'alertes générées depuis le démarrage |
+| Lag SOC analyst | `sum(kafka_consumergroup_lag{topic="security-alerts", consumergroup="soc-analyst"})` | Alertes en attente de lecture — lag élevé = SOC débordé |
+| Messages web-logs (total) | `sum(kafka_topic_partition_current_offset{topic="web-logs"})` | Volume total de requêtes HTTP ingérées |
+| Lag processor | `sum(kafka_consumergroup_lag{topic="web-logs", consumergroup="log-processor"})` | Messages web-logs non encore traités |
+
+**Ligne 2 — Séries temporelles trafic**
+
+| Panel | Métrique | Ce qu'on observe pendant une attaque |
+|---|---|---|
+| Débit entrant web-logs | `rate(kafka_topic_partition_current_offset{topic="web-logs"}[1m])` | Pic brutal sur une partition = IP suspecte (clé = IP) |
+| Alertes publiées (cumul) | `kafka_topic_partition_current_offset{topic="security-alerts"}` | Montée en marches = fenêtres d'attaque successives |
+
+**Ligne 3 — Séries temporelles lag et offset**
+
+| Panel | Métrique | Ce qu'on observe pendant une attaque |
+|---|---|---|
+| Lag log-processor | `kafka_consumergroup_lag{topic="web-logs", consumergroup="log-processor"}` | Pic absorbé puis retour à 0 = consumer sain |
+| Offset par partition | `kafka_topic_partition_current_offset{topic="web-logs"}` | Partition qui accélère seule = IP très active |
+
+### 13.3 Lecture des signaux d'attaque
+
+La clé Kafka du topic `web-logs` étant l'IP source, toutes les requêtes d'une même IP atterrissent sur la même partition. Ce choix de conception rend les attaques directement visibles dans Grafana :
+
+```
+Trafic normal :
+  partition-0  ████░░░░░░  trafic équilibré
+  partition-1  ████░░░░░░
+  partition-2  ████░░░░░░
+
+Brute force (1 IP) :
+  partition-0  ████░░░░░░
+  partition-1  ████░░░░░░
+  partition-2  ████████████████████  <- pic = IP attaquante
+
+DDoS (3 IPs coordonnées) :
+  partition-0  ████████████  <- IP 1
+  partition-1  ████████████  <- IP 2
+  partition-2  ████████████  <- IP 3
+```
+
+### 13.4 Seuils de couleur
+
+Les stats utilisent des seuils de couleur pour attirer l'attention :
+
+| Panel | Vert | Orange | Rouge |
+|---|---|---|---|
+| Alertes publiées | 0-9 | 10-49 | 50+ |
+| Lag SOC analyst | 0-4 | 5-19 | 20+ |
+| Lag processor | 0-99 | 100-499 | 500+ |
+
+### 13.5 Résultats observés
+
+Capture réalisée pendant un scénario `ddos` :
+
+```
+Alertes publiées  : 72  (orange — seuil 10 dépassé)
+Lag SOC analyst   : 5   (orange — consumer légèrement en retard)
+Messages web-logs : 11.9K
+Lag processor     : 9   (vert — processor absorbe le surplus)
+
+Débit web-logs    : pic à 15 req/s sur partition-2 (bleu)
+                    partitions 0 et 1 stables
+Alertes cumul     : courbe plate puis montée en marches à 15:55
+Lag processor     : pic à 12.5 sur partition-2 puis retour à 0
+Offset partitions : partition-1 et partition-2 accélèrent ensemble
+                    -> 2 IPs coordonnées = signature DDoS
+```
+
+---
+
+## 14. Bugs rencontrés et leçons apprises
+
+### 14.1 KAFKA_OPTS hérité dans docker exec
 
 **Symptôme** : toute commande `docker exec kafka kafka-topics.sh ...` échoue avec :
 
@@ -857,7 +942,7 @@ Le script `00_setup.sh` applique systématiquement cette pratique.
 
 ---
 
-### 13.2 Topic __consumer_offsets non créé automatiquement
+### 14.2 Topic __consumer_offsets non créé automatiquement
 
 **Symptôme** : le consumer Python se connecte mais ne reçoit aucun message. Les logs Kafka montrent une boucle infinie :
 
@@ -891,7 +976,7 @@ KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
 ---
 
-### 13.3 Clé Kafka vs champ du payload
+### 14.3 Clé Kafka vs champ du payload
 
 **Symptôme** : `KeyError: 'user_id'` dans le consumer et le processor.
 
@@ -906,7 +991,7 @@ user = msg.key.decode("utf-8") if msg.key else "unknown"
 
 ---
 
-### 13.4 Bug d'indentation dans le sink
+### 14.4 Bug d'indentation dans le sink
 
 **Symptôme** : le sink tourne sans erreur mais n'écrit rien en base.
 
@@ -926,7 +1011,7 @@ for msg in consumer:
 
 ---
 
-### 13.5 Noms de métriques JMX changés en Kafka 4.0
+### 14.5 Noms de métriques JMX changés en Kafka 4.0
 
 **Symptôme** : certains panels Grafana affichent "No data" malgré des targets Prometheus UP.
 
@@ -941,7 +1026,7 @@ for msg in consumer:
 
 ---
 
-### 13.6 Variable de datasource non résolue dans le dashboard JSON
+### 14.6 Variable de datasource non résolue dans le dashboard JSON
 
 **Symptôme** : Grafana affiche "Datasource ${DS_PROMETHEUS_WH211} was not found".
 
@@ -961,7 +1046,7 @@ curl -s http://admin:admin@localhost:3000/api/datasources \
 
 ---
 
-## 14. Lancer le projet depuis zéro
+## 15. Lancer le projet depuis zéro
 
 ### Stack Docker
 
@@ -1041,3 +1126,5 @@ python log/13_live_generator.py   # terminal 3
 | Kafka UI | http://localhost:8080 | aucun |
 | Prometheus Targets | http://localhost:9090/targets | aucun |
 | Grafana | http://localhost:3000 | admin / admin |
+| Dashboard Kafka | http://localhost:3000/dashboards | Dashboards > Kafka > Kafka — Vue d'ensemble |
+| Dashboard SOC | http://localhost:3000/dashboards | Dashboards > Kafka > SOC — Détection Sécurité |
