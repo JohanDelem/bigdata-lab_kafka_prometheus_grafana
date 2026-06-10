@@ -1,4 +1,4 @@
-# Lab BigData — Stack Kafka + Observabilité
+# Lab BigData — Base SIEM & Analyse SOC
 
 ## Contexte
 
