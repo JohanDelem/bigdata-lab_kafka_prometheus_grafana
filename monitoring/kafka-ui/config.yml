@@ -1,0 +1,4 @@
+kafka:
+  clusters:
+    - name: lab
+      bootstrapServers: kafka:9092

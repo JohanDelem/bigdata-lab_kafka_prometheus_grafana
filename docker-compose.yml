@@ -85,17 +85,16 @@ services:
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
-
     depends_on:
       - kafka       # Kafka doit être démarré avant Kafka UI
-
     ports:
       - "8080:8080"  # Interface web accessible sur : http://localhost:8080
-
     environment:
       KAFKA_CLUSTER_0_NAME: lab # Nom affiché du cluster dans l'interface
       KAFKA_CLUSTER_0_BOOTSTRAPSERVERS: kafka:9092 # Adresse du broker Kafka dans le réseau Docker
-      DYNAMIC_CONFIG_ENABLED: "true"  # Autorise la configuration dynamique via l'interface
+      DYNAMIC_CONFIG_ENABLED: "true"  # Autorise ou non la configuration dynamique via l'interface
+    volumes:
+      - ./monitoring/kafka-ui/config.yml:/etc/kafkaui/dynamic_config.yaml
 
   # ============================================================
   # Kafka Exporter
