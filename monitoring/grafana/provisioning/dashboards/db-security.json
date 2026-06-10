@@ -1,0 +1,190 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "schemaVersion": 39,
+  "title": "DLP — Surveillance Base de Données",
+  "tags": ["kafka", "security", "dlp", "postgresql"],
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "5s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Alertes DLP publiées (total)",
+      "description": "Nombre total d'alertes d'exfiltration publiées dans le topic db-alerts depuis le démarrage.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_topic_partition_current_offset{topic=\"db-alerts\"})",
+          "legendFormat": "alertes DLP"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 10 },
+            { "color": "red", "value": 50 }
+          ]},
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Lag analyst DLP (db-alerts)",
+      "description": "Alertes en attente de lecture par db-analyst. Un lag élevé indique que le DLP prend du retard sur les incidents.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_consumergroup_lag{topic=\"db-alerts\", consumergroup=\"db-analyst\"})",
+          "legendFormat": "lag"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 5 },
+            { "color": "red", "value": 20 }
+          ]},
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Requêtes SQL ingérées (total)",
+      "description": "Nombre total de requêtes SQL capturées dans le topic db-queries toutes partitions confondues.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_topic_partition_current_offset{topic=\"db-queries\"})",
+          "legendFormat": "requêtes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }
+          ]},
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Lag monitor DB (db-queries)",
+      "description": "Retard du db-monitor sur le topic db-queries. Un lag persistant indique que le monitor ne suit pas le débit des requêtes SQL.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_consumergroup_lag{topic=\"db-queries\", consumergroup=\"db-monitor\"})",
+          "legendFormat": "lag"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 50 },
+            { "color": "red", "value": 200 }
+          ]},
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Débit requêtes SQL par partition (req/s)",
+      "description": "Taux d'ingestion des requêtes SQL par partition. La clé Kafka étant le user_db, un pic sur une partition = un utilisateur anormalement actif. Signature d'un dump_table ou mass_exfil.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(kafka_topic_partition_current_offset{topic=\"db-queries\"}[1m])",
+          "legendFormat": "partition-{{partition}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Alertes DLP publiées (cumul)",
+      "description": "Offset courant du topic db-alerts. Chaque montée brusque correspond à un scénario d'exfiltration détecté. La pente indique l'intensité de l'attaque.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka_topic_partition_current_offset{topic=\"db-alerts\"}",
+          "legendFormat": "db-alerts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Lag consumer db-monitor (db-queries)",
+      "description": "Retard du monitor par partition. Pendant un scénario mass_exfil, la partition de l'attaquant accumule du lag brièvement puis se résorbe — le monitor absorbe le burst.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka_consumergroup_lag{topic=\"db-queries\", consumergroup=\"db-monitor\"}",
+          "legendFormat": "partition-{{partition}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Offset par partition db-queries",
+      "description": "Progression des offsets par partition. La clé étant le user_db, une partition qui progresse bien plus vite que les autres trahit un utilisateur très actif — potentiellement l'attaquant en cours de dump ou de scraping.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka_topic_partition_current_offset{topic=\"db-queries\"}",
+          "legendFormat": "partition-{{partition}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      }
+    }
+  ]
+}
