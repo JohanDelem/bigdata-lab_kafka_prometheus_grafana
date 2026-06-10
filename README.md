@@ -939,7 +939,121 @@ Offset partitions : partition-1 et partition-2 accélèrent ensemble
 
 ---
 
-## 15. Bugs rencontrés et leçons apprises
+
+## 15. Pipeline surveillance base de données (db/)
+
+### Architecture
+
+PostgreSQL (sensitive_db)
+        |
+        | requêtes SQL simulées
+        v
+db/17_db_simulator.py  -->  topic: db-queries  -->  db/18_db_monitor.py
+                                                           |
+                                                           | topic: db-alerts
+                                                           v
+                                                     db/19_db_alert_consumer.py
+
+### Base de données cible
+
+PostgreSQL 16 avec 4 tables de données sensibles :
+
+| Table | Contenu | Classification |
+|---|---|---|
+| clients | nom, email, téléphone, adresse, date de naissance | RGPD critique |
+| paiements | numéro de carte, IBAN, montant | PCI-DSS critique |
+| contrats | clauses confidentielles, valeur | Confidentiel |
+| employes | salaire, numéro de sécurité sociale | RH sensible |
+
+### Utilisateurs simulés
+
+| User | Profil | DDL autorisé |
+|---|---|---|
+| app_user | application web, requêtes ciblées | non |
+| analyst | analyste métier, agrégats | non |
+| dba_user | DBA, requêtes système | oui |
+| intern_user | stagiaire, accès limité | non |
+| attacker | compte compromis (IP 185.220.101.45) | non |
+
+### Scénarios d'exfiltration simulés
+
+| Scénario | Durée | Comportement | Indicateur |
+|---|---|---|---|
+| normal | 40s | trafic légitime varié | baseline |
+| dump_table | 15s | SELECT * sans WHERE sur tables sensibles | volumétrie + absence filtre |
+| recon | 15s | requêtes sur information_schema, pg_user | accès métadonnées système |
+| mass_exfil | 20s | rafale de SELECT avec grands LIMIT | volume + répétition |
+| priv_escalation | 10s | CREATE USER, GRANT, COPY depuis compte non-admin | DDL non autorisé |
+| scraping | 20s | SELECT paginés sur clients/paiements | pattern itératif |
+
+### Règles de détection (db/18_db_monitor.py)
+
+| Sévérité | Règle | Condition |
+|---|---|---|
+| CRITICAL | TABLE_DUMP | SELECT * sans WHERE sur table sensible |
+| CRITICAL | UNAUTHORIZED_DDL | DDL depuis compte non-admin |
+| HIGH | HIGH_QUERY_VOLUME | > 30 requêtes / fenêtre 10s par user |
+| HIGH | DB_RECON | accès à information_schema, pg_tables, pg_user |
+| HIGH | HIGH_ROWS_RETURNED | > 500 lignes retournées / fenêtre 10s par user |
+| MEDIUM | MULTI_TABLE_ACCESS | accès à 3+ tables sensibles sur une fenêtre |
+
+### Concepts clés
+
+Clé Kafka = user_db — toutes les requêtes d'un même utilisateur vont sur la même partition. Un pic sur une partition = un utilisateur anormalement actif, visible directement dans Grafana et Kafka UI.
+
+Faux positif intentionnel — analyst déclenche régulièrement MULTI_TABLE_ACCESS car il accède naturellement à plusieurs tables. En production, on ajouterait une whitelist par profil utilisateur.
+
+DDL simulé sans exécution — les requêtes CREATE USER, GRANT, COPY sont simulées sans exécution réelle pour ne pas corrompre la base. Le monitor les détecte via le champ query_type de l'événement Kafka.
+
+### Résultats observés
+
+Sur un cycle complet de scénarios (environ 3 minutes) :
+- 268 CRITICAL — principalement TABLE_DUMP pendant dump_table et mass_exfil
+- 72 HIGH — DB_RECON en rafale pendant recon, HIGH_ROWS_RETURNED jusqu'à 32 375 lignes/10s
+- 16 MEDIUM — MULTI_TABLE_ACCESS sur utilisateurs légitimes et attaquant
+
+### Lancer le pipeline
+
+    bash db/15_setup.sh
+    python db/16_db_init.py
+    python db/19_db_alert_consumer.py  # Terminal 1
+    python db/18_db_monitor.py          # Terminal 2
+    python db/17_db_simulator.py        # Terminal 3
+
+---
+
+## 16. Dashboard Grafana DLP (monitoring/grafana/)
+
+### Accès
+
+http://localhost:3000 -> Dashboards -> DLP — Surveillance Base de Données
+
+### Panels
+
+| Panel | Métrique | Lecture |
+|---|---|---|
+| Alertes DLP total | sum offset db-alerts | monte par paliers lors des attaques |
+| Lag analyst DLP | lag db-alerts group db-analyst | doit rester proche de 0 |
+| Requêtes SQL total | sum offset db-queries | croissance continue |
+| Lag monitor DB | lag db-queries group db-monitor | pic temporaire pendant mass_exfil |
+| Débit SQL par partition | rate offset db-queries 1m | pic sur 1 partition = user suspect |
+| Alertes DLP cumul | offset db-alerts | marches = scénarios d'attaque |
+| Lag db-monitor partition | lag db-queries db-monitor | absorption des bursts |
+| Offset partition db-queries | offset db-queries | partition attaquant décroche |
+
+### Lecture des signaux d'attaque
+
+Trafic normal — les 3 partitions de db-queries progressent à vitesse similaire.
+
+dump_table / mass_exfil — la partition de l'attaquant décroche brutalement des autres. Le panel Alertes DLP cumul monte en pente raide simultanément.
+
+recon — pas de pic de débit, mais le panel Alertes DLP cumul monte par petites marches régulières — signature d'une reconnaissance méthodique.
+
+priv_escalation — débit faible mais alertes CRITICAL UNAUTHORIZED_DDL immédiates dans db-alerts.
+
+---
+
+## 17. Bugs rencontrés et leçons apprises
 
 ### 15.1 KAFKA_OPTS hérité dans docker exec
 
@@ -1068,7 +1182,7 @@ curl -s http://admin:admin@localhost:3000/api/datasources \
 
 ---
 
-## 16. Lancer le projet depuis zéro
+## 18. Lancer le projet depuis zéro
 
 ### Stack Docker
 
