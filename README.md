@@ -34,11 +34,17 @@ bigdata-lab_kafka_prometheus_grafana/
 │   ├── 03_processor.py
 │   ├── 04_sink_sqlite.py
 │   └── 05_query.py
-└── log/
-    ├── access.log
-    ├── 10_log_producer.py
-    ├── 11_log_processor.py
-    └── 12_log_query.py
+├── log/
+│   ├── access.log
+│   ├── 10_log_producer.py
+│   ├── 11_log_processor.py
+│   ├── 12_log_query.py
+│   ├── 13_live_generator.py
+│   └── 14_alert_consumer.py
+└── monitoring/
+    ├── ...
+    └── kafka-ui/
+        └── config.yml
 ```
 
 ---
@@ -679,9 +685,156 @@ IPs suspectes detectees :
 
 ---
 
-## 12. Bugs rencontrés et leçons apprises
+## 12. Pipeline détection sécurité temps réel (log/)
 
-### 12.1 KAFKA_OPTS hérité dans docker exec
+### 12.1 Contexte
+
+Ce pipeline étend le pipeline log analysis avec une couche de détection de menaces en temps réel. Il simule ce qu'un **SIEM** (Security Information and Event Management) fait en production : ingérer un flux d'événements, appliquer des règles de corrélation, et publier des alertes classées par sévérité.
+
+Des outils comme Splunk, Elastic SIEM ou Microsoft Sentinel utilisent tous Kafka en entrée de leur pipeline d'ingestion.
+
+### 12.2 Architecture
+
+```
+log/13_live_generator.py
+  génère un flux HTTP en temps réel
+  avec injection automatique de scénarios d'attaque
+        |
+        | topic: web-logs (3 partitions)
+        |
+        v
+log/11_log_processor.py  (enrichi)
+  détecte les anomalies par fenêtres de 10s
+        |
+        +---> topic: log-stats       (agrégats trafic — inchangé)
+        |
+        +---> topic: security-alerts (alertes de sécurité)
+                        |
+                        v
+             log/14_alert_consumer.py
+             console SOC temps réel
+             CRITICAL / HIGH / MEDIUM / LOW
+```
+
+### 12.3 Scénarios d'attaque simulés
+
+Le générateur `13_live_generator.py` alterne automatiquement entre les scénarios suivants sur un cycle de ~135 secondes :
+
+| Scénario | Durée | Comportement simulé | Alertes déclenchées |
+|---|---|---|---|
+| `normal` | 45s | trafic légitime, IPs variées, GET majoritaire | aucune |
+| `brute_force` | 15s | 1 IP fixe, rafale sur `/login`, `/admin/` | CRITICAL + HIGH + MEDIUM |
+| `scan` | 15s | 1 IP fixe, paths suspects (`/.env`, `/etc/passwd`...) | HIGH + MEDIUM |
+| `ddos` | 10s | 3-5 IPs coordonnées, volume x10 | CRITICAL (multiple IPs) |
+| `errors` | 10s | burst de réponses 500 sur `/api/checkout` | HIGH |
+
+### 12.4 Règles de détection
+
+Le processor applique 5 règles sur chaque fenêtre de 10 secondes :
+
+| Règle | Sévérité | Condition | Signification |
+|---|---|---|---|
+| `HIGH_REQUEST_RATE` | CRITICAL | IP > 50 req/fenêtre | brute force ou DDoS |
+| `HIGH_5XX_RATE` | HIGH | taux 5xx > 20% | erreurs serveur anormales |
+| `SUSPICIOUS_PATH` | HIGH | path dans liste noire | scan de vulnérabilités |
+| `MALICIOUS_USER_AGENT` | MEDIUM | UA contient outil offensif | scanner automatisé |
+| `HIGH_4XX_RATE` | MEDIUM | taux 4xx > 30% | scan de ressources |
+
+La liste noire de paths couvre les vecteurs d'attaque les plus courants :
+
+```python
+SUSPICIOUS_PATHS = {
+    "/.env",           # variables d'environnement (secrets, credentials)
+    "/etc/passwd",     # fichier système Unix (LFI — Local File Inclusion)
+    "/wp-admin/",      # interface admin WordPress
+    "/phpmyadmin/",    # interface admin base de données
+    "/.git/config",    # exposition du dépôt Git (credentials, historique)
+    "/backup.sql",     # dump base de données exposé
+    "/config.php",     # fichier de configuration applicative
+    "/wp-login.php",   # page de login WordPress (brute force)
+}
+```
+
+### 12.5 Séparation des topics par domaine
+
+Un principe fondamental de gouvernance des données en streaming est la **séparation des concerns par topic**. Chaque topic a un producteur, des consommateurs et une rétention définis indépendamment.
+
+```
+web-logs          logs bruts — rétention courte (24h en prod)
+                  consommateurs : processor, outils d'audit
+
+log-stats         agrégats trafic — rétention moyenne (7 jours)
+                  consommateurs : Grafana, reporting
+
+security-alerts   alertes de sécurité — rétention longue (90 jours)
+                  consommateurs : SOC, SIEM, ticketing
+```
+
+Cette séparation permet de donner des droits d'accès différents à chaque topic — un analyste SOC peut lire `security-alerts` sans accès aux logs bruts qui peuvent contenir des données personnelles (IPs = données personnelles au sens du RGPD).
+
+### 12.6 Résultats observés
+
+Pendant le scénario `brute_force` (IP `91.108.4.200`) :
+
+```
+[ CRITICAL ] HIGH_REQUEST_RATE
+  IP 91.108.4.200 a envoyé 317 requêtes en 10s
+
+[   HIGH   ] SUSPICIOUS_PATH
+  Paths suspects : /login, /wp-login.php, /admin/
+
+[  MEDIUM  ] MALICIOUS_USER_AGENT
+  User-agents : Nikto/2.1.6, sqlmap/1.7.8, zgrab/0.x, masscan/1.0
+
+[  MEDIUM  ] HIGH_4XX_RATE
+  Taux d'erreurs 4xx : 64.0% (203/317 req)
+```
+
+Pendant le scénario `ddos` (3 IPs coordonnées) :
+
+```
+[ CRITICAL ] HIGH_REQUEST_RATE  IP 193.32.162.10 — 190 req en 10s
+[ CRITICAL ] HIGH_REQUEST_RATE  IP 45.33.32.156  — 208 req en 10s
+[ CRITICAL ] HIGH_REQUEST_RATE  IP 91.108.4.200  — 203 req en 10s
+```
+
+Trois alertes CRITICAL simultanées sur des IPs distinctes = signature caractéristique d'une attaque coordonnée.
+
+### 12.7 Fix Kafka UI — configuration par fichier YAML
+
+**Symptôme** : Kafka UI affiche "No clusters found" malgré les variables `KAFKA_CLUSTER_0_*` dans le `docker-compose.yml`.
+
+**Cause** : les versions récentes de `provectuslabs/kafka-ui` avec `DYNAMIC_CONFIG_ENABLED: "true"` ignorent les variables d'environnement si le fichier de configuration dynamique est absent.
+
+**Solution** : monter un fichier de configuration YAML directement dans le conteneur :
+
+```yaml
+# monitoring/kafka-ui/config.yml
+kafka:
+  clusters:
+    - name: lab
+      bootstrapServers: kafka:9092
+```
+
+```yaml
+# docker-compose.yml — service kafka-ui
+volumes:
+  - ./monitoring/kafka-ui/config.yml:/etc/kafkaui/dynamic_config.yaml
+environment:
+  DYNAMIC_CONFIG_ENABLED: "true"
+```
+
+Le log de démarrage confirme le chargement :
+
+```
+INFO: Dynamic config loaded from /etc/kafkaui/dynamic_config.yaml
+```
+
+---
+
+## 13. Bugs rencontrés et leçons apprises
+
+### 13.1 KAFKA_OPTS hérité dans docker exec
 
 **Symptôme** : toute commande `docker exec kafka kafka-topics.sh ...` échoue avec :
 
@@ -704,7 +857,7 @@ Le script `00_setup.sh` applique systématiquement cette pratique.
 
 ---
 
-### 12.2 Topic __consumer_offsets non créé automatiquement
+### 13.2 Topic __consumer_offsets non créé automatiquement
 
 **Symptôme** : le consumer Python se connecte mais ne reçoit aucun message. Les logs Kafka montrent une boucle infinie :
 
@@ -738,7 +891,7 @@ KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
 ---
 
-### 12.3 Clé Kafka vs champ du payload
+### 13.3 Clé Kafka vs champ du payload
 
 **Symptôme** : `KeyError: 'user_id'` dans le consumer et le processor.
 
@@ -753,7 +906,7 @@ user = msg.key.decode("utf-8") if msg.key else "unknown"
 
 ---
 
-### 12.4 Bug d'indentation dans le sink
+### 13.4 Bug d'indentation dans le sink
 
 **Symptôme** : le sink tourne sans erreur mais n'écrit rien en base.
 
@@ -773,7 +926,7 @@ for msg in consumer:
 
 ---
 
-### 12.5 Noms de métriques JMX changés en Kafka 4.0
+### 13.5 Noms de métriques JMX changés en Kafka 4.0
 
 **Symptôme** : certains panels Grafana affichent "No data" malgré des targets Prometheus UP.
 
@@ -788,7 +941,7 @@ for msg in consumer:
 
 ---
 
-### 12.6 Variable de datasource non résolue dans le dashboard JSON
+### 13.6 Variable de datasource non résolue dans le dashboard JSON
 
 **Symptôme** : Grafana affiche "Datasource ${DS_PROMETHEUS_WH211} was not found".
 
@@ -808,7 +961,7 @@ curl -s http://admin:admin@localhost:3000/api/datasources \
 
 ---
 
-## 13. Lancer le projet depuis zéro
+## 14. Lancer le projet depuis zéro
 
 ### Stack Docker
 
@@ -859,6 +1012,26 @@ python log/10_log_producer.py   # terminal 2
 
 # Consulter le rapport
 python log/12_log_query.py
+```
+
+### Pipeline détection sécurité temps réel
+
+```bash
+# Créer le topic security-alerts (si absent)
+docker exec -e KAFKA_OPTS="" kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --create --if-not-exists \
+  --topic security-alerts --partitions 1 --replication-factor 1
+
+# Activer le venv
+source .venv/bin/activate
+
+# Lancer le pipeline (3 terminaux séparés)
+python log/14_alert_consumer.py   # terminal 1 (démarrer en premier)
+python log/11_log_processor.py    # terminal 2
+python log/13_live_generator.py   # terminal 3
+
+# Observer les alertes en temps réel dans le terminal 1
+# Les scénarios d'attaque se déclenchent automatiquement toutes les ~15-45s
 ```
 
 ### Interfaces web
