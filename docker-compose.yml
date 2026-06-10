@@ -192,6 +192,22 @@ services:
     restart: unless-stopped
 
 # ============================================================
+  # PostgreSQL — Base de données cible pour la simulation
+  # d'exfiltration de données sensibles
+  # ============================================================
+  postgres:
+    image: postgres:16
+    container_name: postgres-lab
+    ports:
+      - "5432:5432"   # Accessible depuis l'hôte : localhost:5432
+    environment:
+      POSTGRES_DB: sensitive_db
+      POSTGRES_USER: dbadmin
+      POSTGRES_PASSWORD: dbpassword
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+# ============================================================
 # Volumes persistants
 # ============================================================
 volumes:
@@ -206,3 +222,6 @@ volumes:
   # Données Grafana :
   # dashboards, utilisateurs, préférences, plugins...
   grafana-data:
+
+  # Données PostgreSQL persistantes
+  postgres-data:
