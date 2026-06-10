@@ -1,0 +1,16 @@
+# Fichier de provisioning Grafana : indique OÙ trouver les fichiers JSON
+# des dashboards à charger automatiquement au démarrage
+# Sans ce fichier, Grafana ne saurait pas où chercher les dashboards
+
+apiVersion: 1
+
+providers:
+  - name: 'kafka-dashboards'  # Nom du provider (informatif)
+    orgId: 1                  # Organisation Grafana (1 = organisation par défaut)
+    folder: 'Kafka'           # Dossier dans lequel les dashboards apparaîtront
+                              # dans l'interface Grafana
+    type: file                # Type de provider : lecture depuis le système de fichiers
+    options:
+      path: /var/lib/grafana/dashboards  # Chemin DANS le conteneur Grafana
+                                         # où sont stockés les fichiers JSON
+                                         # (monté via volume dans docker-compose)

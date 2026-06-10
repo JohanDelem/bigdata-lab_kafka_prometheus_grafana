@@ -1,0 +1,26 @@
+# Fichier de configuration du JMX Exporter (agent Java)
+# Il définit quelles métriques JVM/Kafka exposer au format Prometheus
+
+# Convertit les noms de métriques en minuscules pour uniformité
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+
+# rules = liste de patterns regex qui "capturent" les métriques JMX
+# JMX expose les métriques sous forme d'objets Java (MBeans)
+# Ces patterns transforment les MBeans en métriques Prometheus lisibles
+rules:
+  # Capture les métriques du broker Kafka
+  # Ex: kafka.server<type=BrokerTopicMetrics, name=MessagesInPerSec>
+  # devient: kafka_server_brokertopicmetrics_messagesinpersec
+  - pattern: "kafka.server<type=(.+), name=(.+)><>Value"
+    name: kafka_server_$1_$2
+
+  # Capture les métriques réseau (requêtes entrantes/sortantes)
+  # Ex: kafka.network<type=RequestMetrics, name=RequestsPerSec>
+  - pattern: "kafka.network<type=(.+), name=(.+)><>Value"
+    name: kafka_network_$1_$2
+
+  # Capture les métriques des logs (taille des partitions, offsets...)
+  # Ex: kafka.log<type=LogFlushStats, name=LogFlushRateAndTimeMs>
+  - pattern: "kafka.log<type=(.+), name=(.+)><>Value"
+    name: kafka_log_$1_$2

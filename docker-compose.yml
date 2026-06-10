@@ -1,0 +1,209 @@
+# Nom du projet Docker Compose.
+# Sert notamment de préfixe pour les réseaux, volumes et conteneurs créés.
+name: kafka-bigdata
+
+services:
+
+  # ============================================================
+  # Service Kafka (mode KRaft : broker + controller)
+  # ============================================================
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: kafka
+    hostname: kafka
+
+    ports:
+      - "29092:29092" # Port exposé aux clients externes (producteurs/consommateurs)
+      - "7071:7071"  # Port du JMX Exporter utilisé par Prometheus, Les métriques Kafka seront disponibles sur : http://localhost:7071/metrics
+
+    environment:
+
+      # --------------------------------------------------------
+      # Configuration KRaft (Kafka Raft Metadata Mode)
+      # Remplace ZooKeeper depuis Kafka 3+
+      # --------------------------------------------------------
+
+      
+      KAFKA_NODE_ID: 1 # Identifiant unique du nœud Kafka
+      KAFKA_PROCESS_ROLES: broker,controller  # Ce nœud joue les deux rôles. broker : stockage et gestion des messages . controller : gestion des métadonnées du cluster
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093 # Liste des contrôleurs du cluster KRaft
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER # Nom du listener utilisé par le contrôleur
+
+      # --------------------------------------------------------
+      # Configuration des listeners réseau
+      # --------------------------------------------------------
+
+      # Définition des ports d'écoute Kafka
+      KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:9092,EXTERNAL://:29092 # CONTROLLER : communication KRaft interne, INTERNAL   : communication interne Docker, EXTERNAL   : accès depuis la machine hôte
+
+      # Adresses annoncées aux clients
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092 # kafka:9092 -> accessible aux conteneurs Docker, localhost:29092 -> accessible depuis le poste local
+
+      # Association listener -> protocole de sécurité
+      # Ici tout est en PLAINTEXT pour simplifier le laboratoire
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL # Listener utilisé pour les échanges entre brokers
+
+      # --------------------------------------------------------
+      # Paramètres de réplication et performances
+      # --------------------------------------------------------
+
+      # Facteur de réplication du topic interne __consumer_offsets
+      # Valeur 1 adaptée à un cluster mono-broker
+      KAFKA_OFFSET_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1 # Facteur de réplication du journal des transactions
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1 # Nombre minimal de replicas synchronisés requis
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0 # Réduit le délai avant le premier rééquilibrage d'un consumer group, Très pratique pour les environnements de développement
+      KAFKA_NUM_PARTITIONS: 3 # Nombre de partitions par défaut lors de la création d'un topic
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"  # Autorise la création automatique des topics
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 50
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # --------------------------------------------------------
+      # Intégration Prometheus via JMX Exporter
+      # --------------------------------------------------------
+
+      # KAFKA_OPTS permet de transmettre des options JVM au démarrage
+      #
+      # -javaagent : charge le JMX Exporter comme agent Java
+      # =7071      : port d'exposition des métriques
+      # kafka-jmx.yml : fichier de configuration des métriques à exporter
+      KAFKA_OPTS: "-javaagent:/opt/jmx/jmx_prometheus_javaagent.jar=7071:/opt/jmx/kafka-jmx.yml"
+
+    volumes:
+      # Volume nommé pour conserver les données Kafka
+      # même après suppression du conteneur
+      - kafka-data:/var/lib/kafka/data
+
+      # Bind mount du dossier contenant :
+      # - le jar JMX Exporter
+      # - le fichier kafka-jmx.yml
+      - ./monitoring/jmx:/opt/jmx
+
+  # ============================================================
+  # Interface graphique Kafka UI
+  # ============================================================
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+
+    depends_on:
+      - kafka       # Kafka doit être démarré avant Kafka UI
+
+    ports:
+      - "8080:8080"  # Interface web accessible sur : http://localhost:8080
+
+    environment:
+      KAFKA_CLUSTER_0_NAME: lab # Nom affiché du cluster dans l'interface
+      KAFKA_CLUSTER_0_BOOTSTRAPSERVERS: kafka:9092 # Adresse du broker Kafka dans le réseau Docker
+      DYNAMIC_CONFIG_ENABLED: "true"  # Autorise la configuration dynamique via l'interface
+
+  # ============================================================
+  # Kafka Exporter
+  # Expose des métriques Kafka au format Prometheus
+  # ============================================================
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: kafka-exporter
+
+    depends_on:
+      # Kafka doit être disponible avant l'exporter
+      - kafka
+
+    ports:
+      # Endpoint Prometheus :
+      # http://localhost:9308/metrics
+      - "9308:9308"
+
+    command:
+      # Connexion au broker Kafka via le réseau Docker
+      # kafka = nom du service
+      # 9092 = listener INTERNAL
+      - "--kafka.server=kafka:9092"
+
+    # Redémarre automatiquement sauf arrêt manuel
+    restart: unless-stopped
+
+  # ============================================================
+  # Prometheus
+  # Collecte et stocke les métriques
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+
+    depends_on:
+      - kafka
+      - kafka-exporter
+
+    ports:
+      # Interface web Prometheus
+      # http://localhost:9090
+      - "9090:9090"
+
+    volumes:
+      # Fichier de configuration Prometheus
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+      # Volume persistant contenant les séries temporelles
+      - prometheus-data:/prometheus
+
+    command:
+      # Emplacement du fichier de configuration
+      - "--config.file=/etc/prometheus/prometheus.yml"
+
+      # Répertoire de stockage des métriques
+      - "--storage.tsdb.path=/prometheus"
+
+    restart: unless-stopped
+
+  # ============================================================
+  # Grafana
+  # Visualisation des métriques et tableaux de bord
+  # ============================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    depends_on:
+      - prometheus       # Grafana dépend de Prometheus comme source de données
+    ports:
+      - "3000:3000" # Interface web Grafana http://localhost:3000
+
+    environment:
+      # Identifiants administrateur par défaut
+      # À modifier en environnement de production
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+
+      # Désactive la création libre de comptes
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+    volumes:
+      # Données persistantes Grafana
+      # (utilisateurs, dashboards, plugins, etc.)
+      - grafana-data:/var/lib/grafana
+
+      # Provisioning automatique des datasources
+      # et paramètres Grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+
+      # Dossier contenant les dashboards JSON
+      # automatiquement importés au démarrage
+      - ./monitoring/grafana/provisioning/dashboards:/var/lib/grafana/dashboards
+
+    restart: unless-stopped
+
+# ============================================================
+# Volumes persistants
+# ============================================================
+volumes:
+
+  # Données Kafka :
+  # topics, partitions, offsets, logs, etc.
+  kafka-data:
+
+  # Base de données temporelle Prometheus
+  prometheus-data:
+
+  # Données Grafana :
+  # dashboards, utilisateurs, préférences, plugins...
+  grafana-data:

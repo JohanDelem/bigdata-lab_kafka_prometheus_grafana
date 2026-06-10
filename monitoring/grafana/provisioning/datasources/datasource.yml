@@ -1,0 +1,15 @@
+# Fichier de provisioning Grafana : configure automatiquement les datasources
+# au démarrage du conteneur, sans passer par l'interface web
+# C'est l'équivalent de "Settings > Data Sources" dans l'UI Grafana
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus          # Nom affiché dans Grafana
+    type: prometheus          # Type de datasource (plugin Grafana intégré)
+    access: proxy             # Grafana fait les requêtes vers Prometheus
+                              # (pas le navigateur directement)
+    url: http://prometheus:9090  # URL de Prometheus sur le réseau Docker interne
+                                 # "prometheus" = nom du service docker-compose
+    isDefault: true           # Cette datasource sera sélectionnée par défaut
+                              # dans tous les dashboards

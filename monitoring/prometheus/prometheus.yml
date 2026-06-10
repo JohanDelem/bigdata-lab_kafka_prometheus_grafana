@@ -1,0 +1,36 @@
+# Fichier de configuration principal de Prometheus
+# Il définit QUOI scraper, et à quelle fréquence
+
+global:
+  # Prometheus va collecter les métriques toutes les 15 secondes
+  scrape_interval: 15s
+  # Prometheus va évaluer les règles d'alerte toutes les 15 secondes
+  # (pas d'alertes configurées ici, mais bonne pratique de le définir)
+  evaluation_interval: 15s
+
+# scrape_configs = liste des "cibles" que Prometheus va interroger
+scrape_configs:
+
+  # Job 1 : scrape le JMX Exporter embarqué dans Kafka
+  # Récupère les métriques JVM et internes du broker (mémoire, threads, GC...)
+  # "kafka" = nom du service Docker, accessible via le réseau interne Docker
+  # 7071 = port exposé par l'agent jmx_prometheus_javaagent.jar
+  - job_name: 'kafka-jmx'
+    static_configs:
+      - targets: ['kafka:7071']
+
+  # Job 2 : scrape le Kafka Exporter (conteneur séparé)
+  # Récupère les métriques applicatives Kafka :
+  # - consumer lag (retard de consommation)
+  # - nombre de messages par topic
+  # - état des partitions
+  # "kafka-exporter" = nom du service Docker
+  # 9308 = port par défaut du kafka-exporter
+  - job_name: 'kafka-exporter'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+
+# Job 3 principe du dogfooding : utiliser son propre outil pour se surveiller soi-même.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
