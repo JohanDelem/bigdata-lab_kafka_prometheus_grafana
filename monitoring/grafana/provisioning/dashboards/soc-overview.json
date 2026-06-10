@@ -1,0 +1,190 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "schemaVersion": 39,
+  "title": "SOC — Détection Sécurité",
+  "tags": ["kafka", "security", "soc"],
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "5s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Alertes publiées (total)",
+      "description": "Nombre total d'alertes de sécurité publiées dans le topic security-alerts depuis le démarrage.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_topic_partition_current_offset{topic=\"security-alerts\"})",
+          "legendFormat": "alertes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 10 },
+            { "color": "red", "value": 50 }
+          ] },
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Lag SOC analyst",
+      "description": "Nombre d'alertes en attente de lecture par le consumer soc-analyst. Un lag élevé indique que le SOC prend du retard.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_consumergroup_lag{topic=\"security-alerts\", consumergroup=\"soc-analyst\"})",
+          "legendFormat": "lag"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 5 },
+            { "color": "red", "value": 20 }
+          ] },
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Messages web-logs (total)",
+      "description": "Nombre total de requêtes HTTP ingérées dans le topic web-logs toutes partitions confondues.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_topic_partition_current_offset{topic=\"web-logs\"})",
+          "legendFormat": "requêtes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }
+          ] },
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Lag processor (web-logs)",
+      "description": "Nombre de messages web-logs non encore traités par le log-processor. Un lag persistant indique un processor trop lent.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_consumergroup_lag{topic=\"web-logs\", consumergroup=\"log-processor\"})",
+          "legendFormat": "lag"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 100 },
+            { "color": "red", "value": 500 }
+          ] },
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Débit entrant web-logs (req/s par partition)",
+      "description": "Taux d'ingestion des requêtes HTTP par partition. Un pic soudain sur une partition indique une attaque ciblée depuis une IP spécifique (rappel : clé = IP -> même partition).",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(kafka_topic_partition_current_offset{topic=\"web-logs\"}[1m])",
+          "legendFormat": "partition-{{partition}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Alertes de sécurité publiées (cumul)",
+      "description": "Offset courant du topic security-alerts. Chaque montée brusque correspond à un scénario d'attaque détecté.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka_topic_partition_current_offset{topic=\"security-alerts\"}",
+          "legendFormat": "security-alerts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Lag consumer log-processor (web-logs)",
+      "description": "Retard du processor sur le topic web-logs. En cas d'attaque volumétrique (DDoS), le lag augmente brutalement puis se résorbe quand l'attaque cesse.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka_consumergroup_lag{topic=\"web-logs\", consumergroup=\"log-processor\"}",
+          "legendFormat": "partition-{{partition}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Offset par partition web-logs",
+      "description": "Progression des offsets par partition. La clé Kafka étant l'IP source, une partition qui progresse beaucoup plus vite que les autres trahit une IP très active — potentiellement malveillante.",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka_topic_partition_current_offset{topic=\"web-logs\"}",
+          "legendFormat": "partition-{{partition}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      }
+    }
+  ]
+}
