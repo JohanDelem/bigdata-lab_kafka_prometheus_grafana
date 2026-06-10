@@ -1,4 +1,4 @@
-# Lab BigData — Stack Kafka + Observabilité + Base SIEM & Analyse SOC
+# Lab BigData — Stack Kafka + Observabilité
 
 ## Contexte
 
@@ -7,8 +7,7 @@ Ce document couvre la mise en place d'une stack de streaming distribuée avec Ap
 Tout l'environnement tourne dans des conteneurs Docker orchestrés par Docker Compose.
 
 ---
-![alt text](image-1.png)
-![alt text](image.png)
+
 ## Structure du projet
 
 ```
@@ -40,6 +39,7 @@ bigdata-lab_kafka_prometheus_grafana/
 │   └── 05_query.py
 └── log/
     ├── access.log
+    ├── 09_setup.sh
     ├── 10_log_producer.py
     ├── 11_log_processor.py
     ├── 12_log_query.py
@@ -157,7 +157,28 @@ Accessible sur : `http://localhost:8080`
 
 ---
 
-## 3. Volumes Docker : Named Volume vs Bind Mount
+## 3. Scripts d'initialisation des topics
+
+Chaque pipeline dispose d'un script shell dédié à la création de ses topics Kafka. Ces scripts servent de **documentation exécutable** : ils sont à la fois la trace écrite des commandes à effectuer et le moyen de les exécuter.
+
+| Script | Topics créés | Usage |
+|---|---|---|
+| `tp/00_setup.sh` | `events` (3p), `events-stats` (1p) | Pipeline e-commerce |
+| `log/09_setup.sh` | `web-logs` (3p), `log-stats` (1p), `security-alerts` (1p) | Pipelines log et sécurité |
+
+Les deux scripts partagent les mêmes principes :
+
+**`--if-not-exists`** — idempotent : sans danger si les topics existent déjà, le script peut être relancé sans erreur.
+
+**`-e KAFKA_OPTS=""`** — neutralise l'agent JMX hérité dans `docker exec` (voir section 15.1 Bugs rencontrés).
+
+**`--replication-factor 1`** — adapté au développement mono-broker. En production avec 3 brokers, passer à `--replication-factor 3`.
+
+Les commandes équivalentes en ligne de commande sont documentées dans la section 16 (Lancer depuis zéro) pour référence.
+
+---
+
+## 4. Volumes Docker : Named Volume vs Bind Mount
 
 Deux mécanismes de persistance sont utilisés dans ce projet, avec des usages distincts.
 
@@ -193,7 +214,7 @@ Règle de décision :
 
 ---
 
-## 4. Couche d'observabilité
+## 5. Couche d'observabilité
 
 ### 4.1 Architecture globale
 
@@ -322,7 +343,7 @@ Le fichier `kafka-overview.json` est un dashboard sur mesure adapté aux métriq
 
 ---
 
-## 5. Réseau Docker interne
+## 6. Réseau Docker interne
 
 Docker Compose crée automatiquement un réseau bridge partagé entre tous les services du fichier. Chaque service est accessible par son nom depuis les autres services.
 
@@ -348,7 +369,7 @@ url: http://prometheus:9090                     # pas localhost:9090
 
 ---
 
-## 6. Ports exposés sur la machine hôte
+## 7. Ports exposés sur la machine hôte
 
 | Service | Port hôte | Port conteneur | Usage |
 |---|---|---|---|
@@ -361,7 +382,7 @@ url: http://prometheus:9090                     # pas localhost:9090
 
 ---
 
-## 7. Commandes utiles
+## 8. Commandes utiles
 
 ### Etat de la stack
 
@@ -428,7 +449,7 @@ curl http://localhost:9090/-/ready
 
 ---
 
-## 8. Interfaces web
+## 9. Interfaces web
 
 | Interface | URL | Credentials |
 |---|---|---|
@@ -439,7 +460,7 @@ curl http://localhost:9090/-/ready
 
 ---
 
-## 9. References
+## 10. References
 
 - Apache Kafka KRaft : https://kafka.apache.org/documentation/#kraft
 - JMX Exporter : https://github.com/prometheus/jmx_exporter
@@ -450,7 +471,7 @@ curl http://localhost:9090/-/ready
 
 ---
 
-## 10. Pipeline e-commerce (tp/)
+## 11. Pipeline e-commerce (tp/)
 
 ### 10.1 Architecture du pipeline
 
@@ -546,7 +567,7 @@ temps  0s      10s      20s      30s
 
 ---
 
-## 11. Pipeline analyse de logs (log/)
+## 12. Pipeline analyse de logs (log/)
 
 ### 11.1 Contexte
 
@@ -685,7 +706,7 @@ IPs suspectes detectees :
 
 ---
 
-## 12. Pipeline détection sécurité temps réel (log/)
+## 13. Pipeline détection sécurité temps réel (log/)
 
 ### 12.1 Contexte
 
@@ -832,7 +853,7 @@ INFO: Dynamic config loaded from /etc/kafkaui/dynamic_config.yaml
 
 ---
 
-## 13. Dashboard Grafana SOC (monitoring/grafana/)
+## 14. Dashboard Grafana SOC (monitoring/grafana/)
 
 ### 13.1 Contexte
 
@@ -918,9 +939,9 @@ Offset partitions : partition-1 et partition-2 accélèrent ensemble
 
 ---
 
-## 14. Bugs rencontrés et leçons apprises
+## 15. Bugs rencontrés et leçons apprises
 
-### 14.1 KAFKA_OPTS hérité dans docker exec
+### 15.1 KAFKA_OPTS hérité dans docker exec
 
 **Symptôme** : toute commande `docker exec kafka kafka-topics.sh ...` échoue avec :
 
@@ -943,7 +964,7 @@ Le script `00_setup.sh` applique systématiquement cette pratique.
 
 ---
 
-### 14.2 Topic __consumer_offsets non créé automatiquement
+### 15.2 Topic __consumer_offsets non créé automatiquement
 
 **Symptôme** : le consumer Python se connecte mais ne reçoit aucun message. Les logs Kafka montrent une boucle infinie :
 
@@ -977,7 +998,7 @@ KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
 ---
 
-### 14.3 Clé Kafka vs champ du payload
+### 15.3 Clé Kafka vs champ du payload
 
 **Symptôme** : `KeyError: 'user_id'` dans le consumer et le processor.
 
@@ -992,7 +1013,7 @@ user = msg.key.decode("utf-8") if msg.key else "unknown"
 
 ---
 
-### 14.4 Bug d'indentation dans le sink
+### 15.4 Bug d'indentation dans le sink
 
 **Symptôme** : le sink tourne sans erreur mais n'écrit rien en base.
 
@@ -1012,7 +1033,7 @@ for msg in consumer:
 
 ---
 
-### 14.5 Noms de métriques JMX changés en Kafka 4.0
+### 15.5 Noms de métriques JMX changés en Kafka 4.0
 
 **Symptôme** : certains panels Grafana affichent "No data" malgré des targets Prometheus UP.
 
@@ -1027,7 +1048,7 @@ for msg in consumer:
 
 ---
 
-### 14.6 Variable de datasource non résolue dans le dashboard JSON
+### 15.6 Variable de datasource non résolue dans le dashboard JSON
 
 **Symptôme** : Grafana affiche "Datasource ${DS_PROMETHEUS_WH211} was not found".
 
@@ -1047,7 +1068,7 @@ curl -s http://admin:admin@localhost:3000/api/datasources \
 
 ---
 
-## 15. Lancer le projet depuis zéro
+## 16. Lancer le projet depuis zéro
 
 ### Stack Docker
 
@@ -1062,7 +1083,9 @@ docker ps
 ### Pipeline e-commerce
 
 ```bash
-# Créer les topics
+# Créer les topics via le script
+# tp/00_setup.sh crée events (3 partitions) et events-stats (1 partition)
+# Il utilise --if-not-exists : sans danger si les topics existent déjà
 bash tp/00_setup.sh
 
 # Activer le venv
@@ -1080,14 +1103,17 @@ python tp/05_query.py
 ### Pipeline analyse de logs
 
 ```bash
-# Créer les topics (si absents)
-docker exec -e KAFKA_OPTS="" kafka /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --create --if-not-exists \
-  --topic web-logs --partitions 3 --replication-factor 1
+# Créer les topics via le script (équivalent aux commandes manuelles ci-dessous)
+bash log/09_setup.sh
 
-docker exec -e KAFKA_OPTS="" kafka /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --create --if-not-exists \
-  --topic log-stats --partitions 1 --replication-factor 1
+# Ou manuellement :
+# docker exec -e KAFKA_OPTS="" kafka /opt/kafka/bin/kafka-topics.sh \
+#   --bootstrap-server localhost:9092 --create --if-not-exists \
+#   --topic web-logs --partitions 3 --replication-factor 1
+#
+# docker exec -e KAFKA_OPTS="" kafka /opt/kafka/bin/kafka-topics.sh \
+#   --bootstrap-server localhost:9092 --create --if-not-exists \
+#   --topic log-stats --partitions 1 --replication-factor 1
 
 # Activer le venv
 source .venv/bin/activate
@@ -1103,10 +1129,13 @@ python log/12_log_query.py
 ### Pipeline détection sécurité temps réel
 
 ```bash
-# Créer le topic security-alerts (si absent)
-docker exec -e KAFKA_OPTS="" kafka /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --create --if-not-exists \
-  --topic security-alerts --partitions 1 --replication-factor 1
+# Créer les topics via le script (crée les 3 topics d'un coup)
+bash log/09_setup.sh
+
+# Ou manuellement pour le seul topic security-alerts :
+# docker exec -e KAFKA_OPTS="" kafka /opt/kafka/bin/kafka-topics.sh \
+#   --bootstrap-server localhost:9092 --create --if-not-exists \
+#   --topic security-alerts --partitions 1 --replication-factor 1
 
 # Activer le venv
 source .venv/bin/activate
