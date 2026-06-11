@@ -229,6 +229,23 @@ services:
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     restart: unless-stopped
+
+  # ============================================================
+  # OpenSearch Dashboards — Console SOC investigation
+  # Interface web pour recherche full-text, timelines,
+  # pivot IP/user/host dans les events SIEM normalisés
+  # ============================================================
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    container_name: opensearch-dashboards
+    depends_on:
+      - opensearch
+    ports:
+      - "5601:5601"   # Interface web : http://localhost:5601
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"   # Pas de TLS pour le training
+    restart: unless-stopped    
 # ============================================================
 # Volumes persistants
 # ============================================================
