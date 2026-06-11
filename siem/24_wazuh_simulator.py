@@ -225,6 +225,7 @@ def gen_privilege_esc(attacker_ip):
     agent = random.choice(AGENTS)
     rule_key = random.choice(["sudo_escalation", "new_user_created"])
     return make_event(agent, rule_key, {
+        "srcip":  attacker_ip,
         "srcuser": random.choice(LEGIT_USERS),
         "dstuser": "root",
         "command": random.choice(["sudo su", "sudo bash", "sudo -i", "useradd hacker"]),
