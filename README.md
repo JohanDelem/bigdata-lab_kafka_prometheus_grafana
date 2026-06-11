@@ -55,7 +55,9 @@ bigdata-lab_kafka_prometheus_grafana/
     ├── 19_setup.sh
     ├── 20_normalizer.py
     ├── 21_correlator.py
-    └── 22_corr_consumer.py
+    ├── 22_corr_consumer.py
+    ├── 23_setup_wazuh.sh
+    └── 24_wazuh_simulator.py
 ```
 
 ---
@@ -1166,7 +1168,102 @@ Faux positif maîtrisé — MULTI_SOURCE_CRITICAL exige deux sources distinctes.
 
 ---
 
-## 19. Bugs rencontrés et leçons apprises
+## 19. Pipeline SIEM — Simulation Wazuh (siem/)
+
+### Contexte
+
+Les phases 1 et 2 normalisent et corrèlent les sources déjà présentes dans le lab (web, sécurité, BDD). En production SOC réelle, une source majeure manque : un HIDS (Host Intrusion Detection System) comme Wazuh, qui surveille directement les machines (authentification, intégrité de fichiers, processus). La Phase 3 ajoute cette source.
+
+Aucune VM n'étant disponible en environnement de training, un vrai agent Wazuh ne peut pas être déployé. La phase simule donc le flux d'alertes qu'un Wazuh Server publierait dans Kafka, au format exact attendu — de sorte que normalizer et correlator traitent ces events exactement comme s'ils venaient d'un vrai déploiement.
+
+### Architecture
+
+    siem/24_wazuh_simulator.py ──> topic: wazuh-alerts ──> siem/20_normalizer.py ──> OpenSearch siem-events-YYYY.MM.DD
+                                                                    |
+                                                                    v
+                                                          siem/21_correlator.py (règles WAZUH_*)
+
+### Principe d'isolation par topic
+
+Le simulateur publie dans `wazuh-alerts` exactement comme le ferait un Wazuh Server connecté à de vraies VMs (agents `srv-web-01`, `srv-db-01`, `srv-admin-01`, `workstation-01`). Le jour où ces VMs existeront, seul le producteur change : un vrai Wazuh Server remplace `24_wazuh_simulator.py`. Le normalizer (`20_normalizer.py`) et le correlator (`21_correlator.py`) restent intacts, car ils consomment le topic `wazuh-alerts` sans connaître son origine.
+
+### Format Wazuh
+
+Un event Wazuh suit cette structure (reproduite fidèlement par le simulateur) :
+
+| Champ | Exemple | Description |
+|---|---|---|
+| timestamp | 2026-06-11T10:42:01.000+0000 | Horodatage ISO 8601 |
+| rule.id | 5710 | Identifiant de la règle Wazuh déclenchée |
+| rule.level | 5 | Niveau de sévérité Wazuh (1-15) |
+| rule.groups | ["syslog", "sshd", "authentication_failed"] | Catégories de la règle |
+| agent.name | srv-web-01 | Nom de l'hôte surveillé (clé Kafka) |
+| agent.ip | 10.0.1.10 | IP de l'hôte surveillé |
+| data.srcip | 185.220.101.45 | IP source de l'événement (attaquant ou utilisateur) |
+
+### Agents et scénarios simulés
+
+| Agent | Rôle | IP |
+|---|---|---|
+| srv-web-01 | serveur web frontend | 10.0.1.10 |
+| srv-db-01 | serveur base de données | 10.0.1.20 |
+| srv-admin-01 | serveur d'administration | 10.0.1.5 |
+| workstation-01 | poste développeur | 10.0.1.100 |
+
+| Scénario | Description |
+|---|---|
+| normal | activité système légitime (échecs PAM occasionnels, FIM bénin) |
+| ssh_bruteforce | rafale d'échecs SSH depuis une IP externe sur srv-web-01 |
+| fim_alert | modification de fichier système critique (/etc/passwd, sshd_config...) |
+| privilege_esc | élévation de privilèges suspecte (sudo vers root, création d'utilisateur) |
+| lateral_move | la même IP externe réussit une connexion SSH sur plusieurs hôtes |
+| webshell | exécution de commande suspecte via une requête HTTP |
+
+Le simulateur s'appuie sur 13 règles Wazuh réelles (SSH, PAM, sudo, FIM, attaques web, rootkit), avec leurs id, level et groups officiels.
+
+### Mapping severity (normalizer)
+
+`from_wazuh_alerts()` dans `20_normalizer.py` traduit `rule.level` (échelle Wazuh 1-15) vers le champ `severity` du schéma commun :
+
+| rule.level | severity |
+|---|---|
+| 1-3 | INFO |
+| 4-6 | MEDIUM |
+| 7-9 | HIGH |
+| 10-15 | CRITICAL |
+
+### Nouvelles règles de corrélation
+
+| Règle | Source | Fenêtre | Condition | Sévérité |
+|---|---|---|---|---|
+| WAZUH_LATERAL_MOVE | wazuh (WAZUH_5720) | 5 min | la même IP source réussit une connexion SSH sur 2+ hôtes distincts | CRITICAL |
+| WAZUH_FIM_CRITICAL | wazuh (WAZUH_550 / WAZUH_553) | 5 min | modification de fichier système sur un ou plusieurs hôtes de production | HIGH |
+
+### Bug rencontré : champ host manquant dans query_events
+
+`query_events()` dans `21_correlator.py` restreint les champs récupérés depuis OpenSearch via `_source`. La liste initiale ne contenait pas `host`, alors que les deux nouvelles règles regroupent les events par hôte (`e.get("host", "")`). Résultat : `host` valait toujours `""`, les events n'étaient jamais regroupés par hôte, et WAZUH_LATERAL_MOVE et WAZUH_FIM_CRITICAL ne se déclenchaient jamais malgré des données conformes dans OpenSearch.
+
+**Solution** : ajouter `"host"` à la liste `_source` de `query_events()`.
+
+```python
+"_source": ["@timestamp", "source_type", "severity",
+            "rule", "description", "ip_source", "user", "host"],
+```
+
+### Résultats observés en live
+
+WAZUH_LATERAL_MOVE (CRITICAL) : l'IP 185.220.101.45 (nœud de sortie Tor) a réussi une connexion SSH sur 4 hôtes distincts en moins de 5 minutes — mouvement latéral confirmé.
+
+WAZUH_FIM_CRITICAL (HIGH) : modifications de fichiers système (/etc/passwd, sshd_config...) détectées simultanément sur 4 hôtes — indicateur de persistance ou de compromission généralisée.
+
+### Lancer
+
+    bash siem/23_setup_wazuh.sh            # créer le topic wazuh-alerts
+    python siem/24_wazuh_simulator.py      # en plus des 6 terminaux existants
+
+---
+
+## 20. Bugs rencontrés et leçons apprises
 
 ### 15.1 KAFKA_OPTS hérité dans docker exec
 
@@ -1295,7 +1392,7 @@ curl -s http://admin:admin@localhost:3000/api/datasources \
 
 ---
 
-## 20. Lancer le projet depuis zéro
+## 21. Lancer le projet depuis zéro
 
 ### Stack Docker
 
@@ -1390,7 +1487,10 @@ bash siem/19_setup.sh
 # Activer le venv
 source .venv/bin/activate
 
-# Lancer dans 7 terminaux (ordre important)
+# Créer le topic wazuh-alerts
+bash siem/23_setup_wazuh.sh
+
+# Lancer dans 8 terminaux (ordre important)
 python siem/22_corr_consumer.py   # T1 — console investigation
 python siem/21_correlator.py      # T2 — corrélation cross-sources
 python siem/20_normalizer.py      # T3 — normalisation -> OpenSearch
@@ -1398,6 +1498,7 @@ python log/11_log_processor.py    # T4 — détection web
 python db/18_db_monitor.py        # T5 — détection BDD
 python db/17_db_simulator.py      # T6 — simulation BDD
 python log/13_live_generator.py   # T7 — génération trafic
+python siem/24_wazuh_simulator.py # T8 — simulation Wazuh (4 agents)
 
 # Vérifier le contenu OpenSearch
 curl -s http://localhost:9200/siem-events-$(date +%Y.%m.%d)/_count
