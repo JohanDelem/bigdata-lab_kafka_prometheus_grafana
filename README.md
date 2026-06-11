@@ -6,6 +6,23 @@ Ce document couvre la mise en place d'une stack de streaming distribuée avec Ap
 
 Tout l'environnement tourne dans des conteneurs Docker orchestrés par Docker Compose.
 
+### Vue d'ensemble du flux de données
+
+![Flux de données du lab SIEM](assets/diagrams/architecture-flow.svg)
+
+*Schéma global : des sources (réelles ou simulées) jusqu'aux topics Kafka, à la normalisation/corrélation SIEM, à OpenSearch et aux interfaces de visualisation (OpenSearch Dashboards pour l'investigation SOC, Grafana pour le monitoring infra). Les composants en orange pointillé (`24_wazuh_simulator.py`, topic `wazuh-alerts`) sont **simulés** — voir section 19 pour le détail.*
+
+### Roadmap
+
+| Phase | Contenu | Statut |
+|---|---|---|
+| Phase 0 | Socle Kafka (KRaft) + observabilité (Prometheus/Grafana) | ✅ |
+| Phase 1 | Schéma commun + indexation OpenSearch | ✅ |
+| Phase 2 | Corrélation cross-sources | ✅ |
+| Phase 3 | Source Wazuh — **simulée** (format réel, données générées) | ✅ |
+| Phase 4 | Console SOC unifiée (OpenSearch Dashboards) | ✅ |
+| Phase 5 | Collecte réelle (agents Wazuh sur VM) + gouvernance | ⬜ à venir |
+
 ---
 
 ## Structure du projet
@@ -60,6 +77,8 @@ bigdata-lab_kafka_prometheus_grafana/
 │   ├── 24_wazuh_simulator.py
 │   └── 25_setup_dashboards.sh
 └── assets/
+    ├── diagrams/
+    │   └── architecture-flow.svg
     └── screenshots/
         ├── topic_db-alert.png
         ├── topic_security-alert.png
@@ -1292,6 +1311,42 @@ Le simulateur s'appuie sur 13 règles Wazuh réelles (SSH, PAM, sudo, FIM, attaq
 WAZUH_LATERAL_MOVE (CRITICAL) : l'IP 185.220.101.45 (nœud de sortie Tor) a réussi une connexion SSH sur 4 hôtes distincts en moins de 5 minutes — mouvement latéral confirmé.
 
 WAZUH_FIM_CRITICAL (HIGH) : modifications de fichiers système (/etc/passwd, sshd_config...) détectées simultanément sur 4 hôtes — indicateur de persistance ou de compromission généralisée.
+
+### Ce qui est simulé vs ce qu'apporterait un vrai Wazuh
+
+Cette section précise honnêtement la portée de la Phase 3 : le pipeline est validé de bout en bout, mais la **source** de données est artificielle.
+
+**Ce qu'on a simulé :**
+
+```
+24_wazuh_simulator.py  →  wazuh-alerts  →  normalizer  →  OpenSearch
+```
+
+**Ce qu'un vrai déploiement Wazuh apporterait :**
+
+```
+Wazuh Agent (sur VM)
+    │ collecte réelle
+    │   /var/log/auth.log, /var/log/syslog
+    │   processus système, intégrité fichiers (FIM)
+    ▼
+Wazuh Manager
+    │ corrélation native + règles MITRE ATT&CK (3000+ règles)
+    ▼
+Wazuh Indexer (OpenSearch embarqué)
+    ▼
+Wazuh Dashboard
+```
+
+Les briques manquantes :
+
+- **Un vrai agent sur une vraie machine** — `24_wazuh_simulator.py` n'observe rien, il invente des events. En production, un `ssh_bruteforce` Wazuh provient de vraies tentatives de connexion dans `/var/log/auth.log`.
+- **Le Wazuh Manager** — le vrai moteur de corrélation embarque 3000+ règles natives, la détection de rootkits et le mapping MITRE ATT&CK. Notre `21_correlator.py` a 5 règles artisanales (dont 2 spécifiques Wazuh).
+- **Le FIM (File Integrity Monitoring) réel** — le simulateur génère des events `fim_modified` aléatoires. Un vrai agent calcule un checksum SHA-256 sur chaque fichier surveillé et détecte une modification effective.
+
+**Pourquoi ça ne se voit pas dans OpenSearch Dashboards** : dans Discover, tous les events `source_type: wazuh` proviennent de `24_wazuh_simulator.py`. Rien ne les distingue visuellement d'un vrai agent — le format est strictement identique. C'est précisément le piège pédagogique : le pipeline fonctionne, mais la source est creuse.
+
+**Conséquence pour la roadmap** : la Phase 3 est une **validation d'intégration**, pas une collecte réelle. Elle prouve que le format Wazuh est correctement géré par le normalizer et le correlator. Le jour où de vraies VMs seront disponibles (Phase 5), le seul changement sera de remplacer `24_wazuh_simulator.py` par un vrai Wazuh Manager qui publie dans `wazuh-alerts` — tout le reste (topic, normalizer, correlator, Dashboards) reste intact.
 
 ### Lancer
 
