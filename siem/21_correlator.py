@@ -80,7 +80,7 @@ def query_events(minutes: int, source_type: str = None,
             "size": 500,
             "query": {"bool": {"must": must}},
             "_source": ["@timestamp", "source_type", "severity",
-                        "rule", "description", "ip_source", "user"],
+                        "rule", "description", "ip_source", "user", "host"],
         }
     )
     return [h["_source"] for h in resp["hits"]["hits"]]
@@ -214,10 +214,90 @@ def rule_sustained_attack():
 
 # ── Boucle principale ──────────────────────────────────────────
 
+
+def rule_wazuh_lateral_move():
+    """
+    WAZUH_LATERAL_MOVE : connexions SSH réussies après échecs
+    sur plusieurs hôtes distincts dans une fenêtre de 5 minutes.
+
+    Signature d'un mouvement latéral :
+      - source_type = wazuh
+      - rule contient WAZUH_5720 (ssh success after failures)
+      - 2+ hôtes (host) distincts touchés par le même ip_source
+    """
+    events = query_events(minutes=5, source_type="wazuh", rule="WAZUH_5720")
+    if not events:
+        return
+
+    from collections import defaultdict
+    ip_hosts = defaultdict(set)
+    ip_events = defaultdict(list)
+    for e in events:
+        ip = e.get("ip_source", "")
+        host = e.get("host", "")
+        if ip and host:
+            ip_hosts[ip].add(host)
+            ip_events[ip].append(e)
+
+    for ip, hosts in ip_hosts.items():
+        if len(hosts) >= 2:
+            publish_alert(
+                rule="WAZUH_LATERAL_MOVE",
+                severity="CRITICAL",
+                description=(
+                    f"Mouvement latéral détecté : IP {ip} a réussi "
+                    f"SSH sur {len(hosts)} hôtes distincts en 5 min : "
+                    f"{', '.join(sorted(hosts))}"
+                ),
+                evidence=ip_events[ip][:5],
+                context={
+                    "ip":         ip,
+                    "hosts":      list(hosts),
+                    "host_count": len(hosts),
+                }
+            )
+
+def rule_wazuh_fim_critical():
+    """
+    WAZUH_FIM_CRITICAL : modification de fichier système critique
+    (rule WAZUH_550 ou WAZUH_553) sur un hôte de production
+    dans les 5 dernières minutes.
+
+    Les fichiers /etc/passwd, /etc/shadow, /etc/sudoers modifiés
+    sont des indicateurs d'escalade de privilèges ou de persistance.
+    """
+    events = query_events(minutes=5, source_type="wazuh")
+    fim_events = [
+        e for e in events
+        if e.get("rule", "") in ("WAZUH_550", "WAZUH_553")
+        and e.get("severity") in ("HIGH", "CRITICAL")
+    ]
+
+    if not fim_events:
+        return
+
+    hosts_hit = {e.get("host", "") for e in fim_events if e.get("host")}
+    if hosts_hit:
+        publish_alert(
+            rule="WAZUH_FIM_CRITICAL",
+            severity="HIGH",
+            description=(
+                f"Modification de fichier système critique sur "
+                f"{len(hosts_hit)} hôte(s) : {', '.join(sorted(hosts_hit))}"
+            ),
+            evidence=fim_events[:4],
+            context={
+                "hosts":       list(hosts_hit),
+                "event_count": len(fim_events),
+            }
+        )
+
 RULES = [
     ("RECON_TO_EXFIL",        rule_recon_to_exfil),
     ("MULTI_SOURCE_CRITICAL", rule_multi_source_critical),
     ("SUSTAINED_ATTACK",      rule_sustained_attack),
+    ("WAZUH_LATERAL_MOVE",    rule_wazuh_lateral_move),
+    ("WAZUH_FIM_CRITICAL",    rule_wazuh_fim_critical),
 ]
 
 print(f"[correlator] -> {SINK} | intervalle {INTERVAL_S}s (Ctrl+C pour arrêter)")

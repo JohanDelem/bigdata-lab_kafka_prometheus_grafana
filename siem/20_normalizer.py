@@ -25,7 +25,7 @@ from opensearchpy import OpenSearch, helpers
 from kafka import KafkaConsumer
 
 BOOTSTRAP   = "localhost:29092"
-TOPICS      = ["security-alerts", "db-alerts", "web-logs"]
+TOPICS      = ["security-alerts", "db-alerts", "web-logs", "wazuh-alerts"]
 GROUP       = "siem-normalizer"
 OS_HOST     = "localhost"
 OS_PORT     = 9200
@@ -128,10 +128,52 @@ def from_web_logs(raw: dict) -> dict:
         "raw":         raw,
     }
 
+
+def from_wazuh_alerts(raw: dict) -> dict:
+    """
+    Format source (24_wazuh_simulator.py / vrai agent Wazuh) :
+      timestamp, rule.id, rule.description, rule.level,
+      rule.groups, agent.name, agent.ip, data.srcip, data.dstuser
+
+    Mapping rule.level -> severity :
+      1-3   INFO
+      4-6   MEDIUM
+      7-9   HIGH
+      10-15 CRITICAL
+    """
+    rule    = raw.get("rule", {})
+    agent   = raw.get("agent", {})
+    data    = raw.get("data", {})
+    level   = rule.get("level", 1)
+    groups  = rule.get("groups", [])
+
+    if level >= 10:
+        severity = "CRITICAL"
+    elif level >= 7:
+        severity = "HIGH"
+    elif level >= 4:
+        severity = "MEDIUM"
+    else:
+        severity = "INFO"
+
+    return {
+        "@timestamp":  raw.get("timestamp", datetime.now(timezone.utc).isoformat()),
+        "source_type": "wazuh",
+        "severity":    severity,
+        "rule":        f"WAZUH_{rule.get('id', 'UNKNOWN')}",
+        "description": rule.get("description", ""),
+        "ip_source":   data.get("srcip", agent.get("ip", "")),
+        "user":        data.get("dstuser", ""),
+        "host":        agent.get("name", ""),
+        "tags":        ["wazuh", "hids"] + groups,
+        "raw":         raw,
+    }
+
 NORMALIZERS = {
     "security-alerts": from_security_alerts,
     "db-alerts":       from_db_alerts,
     "web-logs":        from_web_logs,
+    "wazuh-alerts":    from_wazuh_alerts,
 }
 
 # ── Consumer ───────────────────────────────────────────────────
