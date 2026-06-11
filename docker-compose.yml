@@ -191,7 +191,7 @@ services:
 
     restart: unless-stopped
 
-# ============================================================
+  # ============================================================
   # PostgreSQL — Base de données cible pour la simulation
   # d'exfiltration de données sensibles
   # ============================================================
@@ -206,6 +206,28 @@ services:
       POSTGRES_PASSWORD: dbpassword
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # ============================================================
+  # OpenSearch — Stockage indexé des événements SIEM
+  # Remplace Elasticsearch dans la stack Wazuh open source
+  # ============================================================
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: opensearch
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true      # Pas de TLS/auth pour le training
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m   # Limité à 512 Mo RAM
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"   # API REST OpenSearch
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
     restart: unless-stopped
 # ============================================================
 # Volumes persistants
@@ -225,3 +247,6 @@ volumes:
 
   # Données PostgreSQL persistantes
   postgres-data:
+
+  # Données OpenSearch persistantes
+  opensearch-data:
