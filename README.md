@@ -1113,6 +1113,32 @@ OpenSearch 2.13.0 est ajouté au docker-compose.yml (port 9200, 512 Mo RAM, mode
 
 Consomme les 3 topics simultanément, mappe chaque format source vers le schéma commun, indexe dans un index partitionné par jour (siem-events-YYYY.MM.DD). Les requêtes HTTP normales (2xx/3xx) sont filtrées — seules les anomalies sont indexées.
 
+### Comment OpenSearch reçoit les données
+
+OpenSearch n'accède jamais à Kafka directement — il n'a aucune notion des topics. Le pont entre les deux mondes est `siem/20_normalizer.py`, qui agit comme **consumer Kafka** d'un côté et **client REST OpenSearch** de l'autre :
+
+```
+Kafka topics                    siem/20_normalizer.py              OpenSearch
+(security-alerts,                                                  (port 9200)
+ db-alerts,           ──>  consumer Kafka  ──>  POST /siem-events-YYYY.MM.DD/_doc
+ web-logs,                 (port 29092)         via opensearch-py
+ wazuh-alerts)                                  (API REST)
+```
+
+Dans le code, ce pont tient en deux lignes :
+
+```python
+os_client = OpenSearch(hosts=[{"host": "localhost", "port": 9200}])
+...
+os_client.index(index=current_index, body=doc)
+```
+
+`opensearch-py` n'est qu'un wrapper autour de l'API REST d'OpenSearch : `os_client.index(...)` envoie un `POST http://localhost:9200/siem-events-2026.06.11/_doc` avec le document JSON normalisé. Pour OpenSearch, ce document arrive comme n'importe quel appel HTTP — il ne sait pas qu'il provient de Kafka.
+
+**Conséquence importante** : le normalizer doit tourner en continu pour que les Dashboards affichent des données à jour. S'il est arrêté, Kafka continue d'accumuler les messages (visibles via le lag du consumer group `siem-normalizer` dans Grafana), mais OpenSearch n'indexe plus rien tant qu'il n'est pas relancé.
+
+En production, ce rôle de pont serait tenu par Logstash ou un connecteur Kafka Connect (sink OpenSearch) — le même principe (consumer Kafka + écriture via API REST), mais avec gestion native des retries, du backpressure et du dead-letter queue.
+
 ### Concepts clés
 
 Index par jour — même pattern qu'en production dans les stacks Wazuh ou Elastic SIEM. Permet de définir des politiques de rétention par date (chaud/tiède/froid) sans modifier le code.
@@ -1301,6 +1327,24 @@ Configure automatiquement OpenSearch Dashboards au démarrage :
 2. Crée l'index pattern `siem-events-*` avec `@timestamp` comme champ temporel
 3. Le définit comme index par défaut
 4. Crée l'index pattern `corr-alerts` (optionnel)
+
+### Deux API REST distinctes
+
+Ce script ne touche pas OpenSearch directement — il appelle l'**API REST de Dashboards** (port 5601), pas celle d'OpenSearch (port 9200) :
+
+```bash
+curl -X POST "http://localhost:5601/api/saved_objects/index-pattern/siem-events" ...
+```
+
+C'est de la **configuration** de Dashboards ("voici les index que tu dois savoir lire et avec quel champ temporel"), pas de l'écriture de données. Les deux flux REST sont donc complètement séparés :
+
+| Composant | API appelée | Port | Rôle |
+|---|---|---|---|
+| `siem/20_normalizer.py` | API REST OpenSearch | 9200 | Écrit les documents (`POST /siem-events-*/_doc`) |
+| `siem/25_setup_dashboards.sh` | API REST Dashboards | 5601 | Configure les index patterns (saved objects) |
+| `opensearch-dashboards` (conteneur) | API REST OpenSearch | 9200 (réseau Docker interne) | Lit les documents pour les afficher dans Discover |
+
+Dashboards ne stocke aucune donnée lui-même : il interroge OpenSearch en interne via `OPENSEARCH_HOSTS: '["http://opensearch:9200"]'` (voir docker-compose.yml) à chaque requête dans Discover.
 
 ### Lancer
 
