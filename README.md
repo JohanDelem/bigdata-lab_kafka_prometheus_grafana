@@ -51,13 +51,23 @@ bigdata-lab_kafka_prometheus_grafana/
 │   ├── 17_db_simulator.py
 │   ├── 18_db_monitor.py
 │   └── 19_db_alert_consumer.py
-└── siem/
-    ├── 19_setup.sh
-    ├── 20_normalizer.py
-    ├── 21_correlator.py
-    ├── 22_corr_consumer.py
-    ├── 23_setup_wazuh.sh
-    └── 24_wazuh_simulator.py
+├── siem/
+│   ├── 19_setup.sh
+│   ├── 20_normalizer.py
+│   ├── 21_correlator.py
+│   ├── 22_corr_consumer.py
+│   ├── 23_setup_wazuh.sh
+│   ├── 24_wazuh_simulator.py
+│   └── 25_setup_dashboards.sh
+└── assets/
+    └── screenshots/
+        ├── topic_db-alert.png
+        ├── topic_security-alert.png
+        ├── topic_corr-alerts.png
+        ├── dashboard_vue_d_nesemble.png
+        ├── dashboard_surveillance_bdd.png
+        ├── dashboard_SOC_.png
+        └── openSearch_Dashboard_siem_event.png
 ```
 
 ---
@@ -187,7 +197,7 @@ Les deux scripts partagent les mêmes principes :
 
 **`--replication-factor 1`** — adapté au développement mono-broker. En production avec 3 brokers, passer à `--replication-factor 3`.
 
-Les commandes équivalentes en ligne de commande sont documentées dans la section 20 (Lancer depuis zéro) pour référence.
+Les commandes équivalentes en ligne de commande sont documentées dans la section 22 (Lancer depuis zéro) pour référence.
 
 ---
 
@@ -470,6 +480,7 @@ curl http://localhost:9090/-/ready
 | Prometheus | http://localhost:9090 | aucun |
 | Prometheus Targets | http://localhost:9090/targets | aucun |
 | Grafana | http://localhost:3000 | admin / admin |
+| OpenSearch Dashboards | http://localhost:5601 | aucun (sécurité désactivée pour le training) |
 
 ---
 
@@ -1263,7 +1274,86 @@ WAZUH_FIM_CRITICAL (HIGH) : modifications de fichiers système (/etc/passwd, ssh
 
 ---
 
-## 20. Bugs rencontrés et leçons apprises
+## 20. Pipeline SIEM — Console SOC OpenSearch Dashboards (siem/)
+
+### Contexte
+
+Les phases 1 à 3 normalisent (`20_normalizer.py`), corrèlent (`21_correlator.py`) et enrichissent (`24_wazuh_simulator.py`) les events dans OpenSearch. Mais l'accès aux données reste limité à des requêtes `curl` sur l'API OpenSearch ou à la console `22_corr_consumer.py`. Un analyste SOC a besoin d'une interface de recherche et d'investigation visuelle.
+
+Grafana et OpenSearch Dashboards répondent à deux besoins différents et complémentaires :
+
+| Outil | Usage | Ce qu'on voit |
+|---|---|---|
+| Grafana | Monitoring infra | Métriques Kafka, lag, débit, offsets — via Prometheus |
+| OpenSearch Dashboards | Investigation SOC | Events individuels, recherche full-text, pivot, timeline — via OpenSearch |
+
+Grafana répond à « est-ce que le pipeline tourne normalement ? ». OpenSearch Dashboards répond à « que s'est-il passé sur cette IP / cet hôte / cette plage horaire ? ». La Phase 4 ajoute ce second outil.
+
+### docker-compose.yml
+
+Le service `opensearch-dashboards:2.13.0` est ajouté, exposé sur le port 5601, avec `DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"` (pas de TLS/authentification pour le training) et une dépendance sur le service `opensearch`.
+
+### siem/25_setup_dashboards.sh
+
+Configure automatiquement OpenSearch Dashboards au démarrage :
+
+1. Attend que le service soit prêt (retry 10s x12)
+2. Crée l'index pattern `siem-events-*` avec `@timestamp` comme champ temporel
+3. Le définit comme index par défaut
+4. Crée l'index pattern `corr-alerts` (optionnel)
+
+### Lancer
+
+```bash
+docker compose up -d opensearch-dashboards
+bash siem/25_setup_dashboards.sh
+```
+
+### Discover : événements SIEM normalisés en temps réel
+
+![OpenSearch Dashboards Discover — events Wazuh normalisés](assets/screenshots/openSearch_Dashboard_siem_event.png)
+
+*Discover affiche les events Wazuh en temps réel avec tous les champs normalisés visibles : `source_type`, `severity`, `rule`, `host`, `ip_source`, `tags`, `raw.*`.*
+
+### 3 usages SOC validés dans Discover
+
+| Usage | Requête | Objectif |
+|---|---|---|
+| Filtrer par source | `source_type : wazuh` | Isoler les events provenant d'une source donnée |
+| Investiguer une IP suspecte cross-sources | `ip_source : 185.220.101.45` | Retrouver toute l'activité d'une IP, tous topics confondus |
+| Filtrer par sévérité | `severity : CRITICAL` | Se concentrer sur les incidents les plus graves |
+
+### Vue Kafka UI des topics SIEM
+
+![Topic db-alerts dans Kafka UI](assets/screenshots/topic_db-alert.png)
+
+*Le topic `db-alerts` contient les alertes DLP déclenchées par les règles `TABLE_DUMP` et `MULTI_TABLE_ACCESS`.*
+
+![Topic security-alerts dans Kafka UI](assets/screenshots/topic_security-alert.png)
+
+*Le topic `security-alerts` contient les alertes `HIGH_REQUEST_RATE`, `SUSPICIOUS_PATH` et `MALICIOUS_USER_AGENT`.*
+
+![Topic corr-alerts dans Kafka UI](assets/screenshots/topic_corr-alerts.png)
+
+*Le topic `corr-alerts` contient l'alerte `MULTI_SOURCE_CRITICAL`, avec sa chaîne de preuves embarquée.*
+
+### Dashboards Grafana (monitoring infra)
+
+![Grafana — Kafka vue d'ensemble](assets/screenshots/dashboard_vue_d_nesemble.png)
+
+*Le dashboard Kafka — Vue d'ensemble montre les 9 topics actifs, le lag des consumers et les offsets par topic.*
+
+![Grafana — surveillance base de données](assets/screenshots/dashboard_surveillance_bdd.png)
+
+*Le dashboard DLP montre le pic de débit SQL lors d'un `dump_table`, avec le lag absorbé par le consumer.*
+
+![Grafana — dashboard SOC](assets/screenshots/dashboard_SOC_.png)
+
+*Le dashboard SOC montre les pics de débit `web-logs` lors des scénarios d'attaque, avec les alertes en marches d'escalier.*
+
+---
+
+## 21. Bugs rencontrés et leçons apprises
 
 ### 15.1 KAFKA_OPTS hérité dans docker exec
 
@@ -1392,7 +1482,7 @@ curl -s http://admin:admin@localhost:3000/api/datasources \
 
 ---
 
-## 21. Lancer le projet depuis zéro
+## 22. Lancer le projet depuis zéro
 
 ### Stack Docker
 
@@ -1478,8 +1568,11 @@ python log/13_live_generator.py   # terminal 3
 Prérequis : stack Docker démarrée avec OpenSearch, et pipelines log + db opérationnels.
 
 ```bash
-# Démarrer OpenSearch si pas encore fait
-docker compose up -d opensearch
+# Démarrer OpenSearch et OpenSearch Dashboards si pas encore fait
+docker compose up -d opensearch opensearch-dashboards
+
+# Configurer la console SOC (index patterns)
+bash siem/25_setup_dashboards.sh
 
 # Créer le topic corr-alerts
 bash siem/19_setup.sh
@@ -1516,3 +1609,4 @@ curl -s http://localhost:9200/siem-events-$(date +%Y.%m.%d)/_count
 | Dashboard DLP | http://localhost:3000/dashboards | Dashboards > Kafka > DLP — Surveillance Base de Données |
 | OpenSearch API | http://localhost:9200 | aucun (désactivé pour training) |
 | OpenSearch index | http://localhost:9200/siem-events-*/_count | comptage documents indexés |
+| OpenSearch Dashboards | http://localhost:5601 | aucun (sécurité désactivée pour le training) |
