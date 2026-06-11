@@ -10,18 +10,18 @@ Tout l'environnement tourne dans des conteneurs Docker orchestrés par Docker Co
 
 ![Flux de données du lab SIEM](assets/diagrams/architecture-flow.svg)
 
-*Schéma global : des sources (réelles ou simulées) jusqu'aux topics Kafka, à la normalisation/corrélation SIEM, à OpenSearch et aux interfaces de visualisation (OpenSearch Dashboards pour l'investigation SOC, Grafana pour le monitoring infra). Les composants en orange pointillé (`24_wazuh_simulator.py`, topic `wazuh-alerts`) sont **simulés** — voir section 19 pour le détail.*
+*Schéma global : des sources jusqu'aux topics Kafka, à la normalisation/corrélation SIEM, à OpenSearch et aux interfaces de visualisation (OpenSearch Dashboards pour l'investigation SOC, Grafana pour le monitoring infra). Les composants en orange pointillé sont des **simulateurs** — tous les producteurs de données du lab (`13_live_generator.py`, `17_db_simulator.py`, `24_wazuh_simulator.py`) génèrent des événements artificiels, au format réel, mais sans collecte sur de vraies machines. Voir section 19 pour le détail sur Wazuh.*
 
 ### Roadmap
 
 | Phase | Contenu | Statut |
 |---|---|---|
-| Phase 0 | Socle Kafka (KRaft) + observabilité (Prometheus/Grafana) | ✅ |
-| Phase 1 | Schéma commun + indexation OpenSearch | ✅ |
-| Phase 2 | Corrélation cross-sources | ✅ |
-| Phase 3 | Source Wazuh — **simulée** (format réel, données générées) | ✅ |
-| Phase 4 | Console SOC unifiée (OpenSearch Dashboards) | ✅ |
-| Phase 5 | Collecte réelle (agents Wazuh sur VM) + gouvernance | ⬜ à venir |
+| Phase 0 | Socle Kafka (KRaft) + observabilité (Prometheus/Grafana) | fait |
+| Phase 1 | Schéma commun + indexation OpenSearch | fait |
+| Phase 2 | Corrélation cross-sources | fait |
+| Phase 3 | Source Wazuh — simulée (format réel, données générées) | fait |
+| Phase 4 | Console SOC unifiée (OpenSearch Dashboards) | fait |
+| Phase 5 | Collecte réelle (agents sur VM, toutes sources) + gouvernance | à venir |
 
 ---
 

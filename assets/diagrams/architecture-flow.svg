@@ -21,15 +21,17 @@
   <!-- ============ COLUMN 1 : SOURCES ============ -->
   <text x="120" y="100" font-size="14" font-weight="700" fill="#374151">SOURCES</text>
 
-  <!-- Web traffic -->
-  <rect x="20" y="115" width="200" height="56" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="120" y="138" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">log/13_live_generator.py</text>
-  <text x="120" y="156" text-anchor="middle" font-size="11" fill="#1e3a8a">Trafic web simulé (réel : nginx/access.log)</text>
+  <!-- Web traffic simulator -->
+  <rect x="20" y="115" width="200" height="56" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="120" y="136" text-anchor="middle" font-size="13" font-weight="700" fill="#92400e">log/13_live_generator.py</text>
+  <text x="120" y="153" text-anchor="middle" font-size="11" fill="#92400e">SIMULÉ — trafic web généré</text>
+  <text x="120" y="167" text-anchor="middle" font-size="11" fill="#92400e">(réel : nginx/access.log)</text>
 
   <!-- DB simulator -->
-  <rect x="20" y="187" width="200" height="56" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="120" y="210" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">db/17_db_simulator.py</text>
-  <text x="120" y="228" text-anchor="middle" font-size="11" fill="#1e3a8a">Activité BDD simulée (réel : audit log SQL)</text>
+  <rect x="20" y="187" width="200" height="56" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="120" y="208" text-anchor="middle" font-size="13" font-weight="700" fill="#92400e">db/17_db_simulator.py</text>
+  <text x="120" y="225" text-anchor="middle" font-size="11" fill="#92400e">SIMULÉ — activité BDD générée</text>
+  <text x="120" y="239" text-anchor="middle" font-size="11" fill="#92400e">(réel : audit log SQL)</text>
 
   <!-- Detection web -->
   <rect x="20" y="259" width="200" height="56" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
@@ -47,11 +49,11 @@
   <text x="120" y="442" text-anchor="middle" font-size="11" fill="#92400e">SIMULÉ — invente des events</text>
   <text x="120" y="458" text-anchor="middle" font-size="11" fill="#92400e">au format Wazuh (Phase 3)</text>
 
-  <!-- Future Wazuh agent -->
+  <!-- Future real agents -->
   <rect x="20" y="487" width="200" height="68" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,4"/>
-  <text x="120" y="508" text-anchor="middle" font-size="13" font-weight="600" fill="#6b7280">Wazuh Agent réel (futur)</text>
+  <text x="120" y="508" text-anchor="middle" font-size="13" font-weight="600" fill="#6b7280">Agents/sources réels (futur)</text>
   <text x="120" y="526" text-anchor="middle" font-size="11" fill="#6b7280">Phase 5 — collecte réelle :</text>
-  <text x="120" y="543" text-anchor="middle" font-size="11" fill="#6b7280">auth.log, FIM, syscalls</text>
+  <text x="120" y="543" text-anchor="middle" font-size="11" fill="#6b7280">nginx, audit SQL, Wazuh agents</text>
 
   <!-- ============ COLUMN 2 : KAFKA TOPICS ============ -->
   <text x="430" y="100" font-size="14" font-weight="700" fill="#374151">KAFKA (KRaft)</text>
@@ -132,13 +134,15 @@
   <text x="1115" y="322" text-anchor="middle" font-size="11" fill="#9d174d">scrape JMX exporter + kafka exporter</text>
 
   <!-- ============ ARROWS : sources -> kafka ============ -->
-  <path d="M220,143 L350,205" fill="none" stroke="#5b6573" stroke-width="1.6" marker-end="url(#arrow)"/>
-  <path d="M220,215 L350,290" fill="none" stroke="#5b6573" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <path d="M220,143 L220,259" fill="none" stroke="#d97706" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
+  <text x="225" y="200" font-size="10" fill="#92400e">access.log</text>
+  <path d="M220,215 L220,331" fill="none" stroke="#d97706" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
+  <text x="225" y="280" font-size="10" fill="#92400e">requêtes SQL</text>
   <path d="M220,287 L350,250" fill="none" stroke="#5b6573" stroke-width="1.6" marker-end="url(#arrow)"/>
   <path d="M220,359 L350,310" fill="none" stroke="#5b6573" stroke-width="1.6" marker-end="url(#arrow)"/>
   <path d="M220,437 L350,338" fill="none" stroke="#d97706" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
   <path d="M220,521 L220,560 Q220,575 235,575 L335,575" fill="none" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow)"/>
-  <text x="280" y="595" text-anchor="middle" font-size="10" fill="#6b7280">remplacerait le simulateur</text>
+  <text x="280" y="595" text-anchor="middle" font-size="10" fill="#6b7280">remplacerait les simulateurs</text>
 
   <!-- ============ ARROWS : kafka -> normalizer/correlator ============ -->
   <path d="M530,212 L650,147" fill="none" stroke="#5b6573" stroke-width="1.6" marker-end="url(#arrow)"/>
@@ -184,33 +188,33 @@
     <rect x="0" y="0" width="1240" height="240" rx="10" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
     <text x="20" y="30" font-size="15" font-weight="700" fill="#1f2937">Légende</text>
 
-    <!-- Real data flow -->
-    <rect x="20" y="48" width="26" height="26" rx="5" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
-    <text x="56" y="66" font-size="12" fill="#1f2937">Source / traitement réel — données générées et traitées par du vrai code Python</text>
+    <!-- Simulated sources -->
+    <rect x="20" y="48" width="26" height="26" rx="5" fill="#fef3c7" stroke="#d97706" stroke-width="2" stroke-dasharray="6,3"/>
+    <text x="56" y="66" font-size="12" fill="#1f2937">Source SIMULÉE — script Python qui génère des événements artificiels au format réel (trafic web, activité BDD, alertes Wazuh)</text>
+
+    <!-- Real processing -->
+    <rect x="20" y="84" width="26" height="26" rx="5" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="56" y="102" font-size="12" fill="#1f2937">Traitement réel — détection appliquée sur les données simulées (vraies règles, vrai code Python)</text>
 
     <!-- Kafka -->
-    <rect x="20" y="84" width="26" height="26" rx="5" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
-    <text x="56" y="102" font-size="12" fill="#1f2937">Kafka (KRaft) — bus d'événements central, tout transite par des topics</text>
+    <rect x="20" y="120" width="26" height="26" rx="5" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="56" y="138" font-size="12" fill="#1f2937">Kafka (KRaft) — bus d'événements central, tout transite par des topics</text>
 
     <!-- normalizer/processing -->
-    <rect x="20" y="120" width="26" height="26" rx="5" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
-    <text x="56" y="138" font-size="12" fill="#1f2937">Pipeline SIEM — normalisation, corrélation, console investigation (siem/)</text>
+    <rect x="20" y="156" width="26" height="26" rx="5" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
+    <text x="56" y="174" font-size="12" fill="#1f2937">Pipeline SIEM — normalisation, corrélation, console investigation (siem/)</text>
 
     <!-- opensearch -->
-    <rect x="20" y="156" width="26" height="26" rx="5" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
-    <text x="56" y="174" font-size="12" fill="#1f2937">OpenSearch — stockage indexé, exposé via API REST :9200</text>
+    <rect x="20" y="192" width="26" height="26" rx="5" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+    <text x="56" y="210" font-size="12" fill="#1f2937">OpenSearch — stockage indexé, exposé via API REST :9200</text>
 
     <!-- dashboards/grafana -->
-    <rect x="20" y="192" width="26" height="26" rx="5" fill="#eef2ff" stroke="#4f46e5" stroke-width="2"/>
-    <text x="56" y="210" font-size="12" fill="#1f2937">Visualisation — OpenSearch Dashboards (investigation SOC) / Grafana (monitoring infra)</text>
-
-    <!-- Simulated -->
-    <rect x="640" y="48" width="26" height="26" rx="5" fill="#fef3c7" stroke="#d97706" stroke-width="2" stroke-dasharray="6,3"/>
-    <text x="676" y="66" font-size="12" fill="#1f2937">SIMULÉ (Phase 3) — events Wazuh générés artificiellement, format réel mais source creuse</text>
+    <rect x="640" y="48" width="26" height="26" rx="5" fill="#eef2ff" stroke="#4f46e5" stroke-width="2"/>
+    <text x="676" y="66" font-size="12" fill="#1f2937">Visualisation — OpenSearch Dashboards (investigation SOC) / Grafana (monitoring infra)</text>
 
     <!-- Future -->
     <rect x="640" y="84" width="26" height="26" rx="5" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,4"/>
-    <text x="676" y="102" font-size="12" fill="#1f2937">Composant futur — non déployé (Phase 5 : agent Wazuh réel sur VM)</text>
+    <text x="676" y="102" font-size="12" fill="#1f2937">Composant futur — non déployé (Phase 5 : agents et sources de données réels sur VM)</text>
 
     <!-- arrows -->
     <line x1="640" y1="132" x2="690" y2="132" stroke="#5b6573" stroke-width="1.6" marker-end="url(#arrow)"/>
