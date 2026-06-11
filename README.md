@@ -37,14 +37,25 @@ bigdata-lab_kafka_prometheus_grafana/
 │   ├── 03_processor.py
 │   ├── 04_sink_sqlite.py
 │   └── 05_query.py
-└── log/
-    ├── access.log
-    ├── 09_setup.sh
-    ├── 10_log_producer.py
-    ├── 11_log_processor.py
-    ├── 12_log_query.py
-    ├── 13_live_generator.py
-    └── 14_alert_consumer.py
+├── log/
+│   ├── access.log
+│   ├── 09_setup.sh
+│   ├── 10_log_producer.py
+│   ├── 11_log_processor.py
+│   ├── 12_log_query.py
+│   ├── 13_live_generator.py
+│   └── 14_alert_consumer.py
+├── db/
+│   ├── 15_setup.sh
+│   ├── 16_db_init.py
+│   ├── 17_db_simulator.py
+│   ├── 18_db_monitor.py
+│   └── 19_db_alert_consumer.py
+└── siem/
+    ├── 19_setup.sh
+    ├── 20_normalizer.py
+    ├── 21_correlator.py
+    └── 22_corr_consumer.py
 ```
 
 ---
@@ -174,7 +185,7 @@ Les deux scripts partagent les mêmes principes :
 
 **`--replication-factor 1`** — adapté au développement mono-broker. En production avec 3 brokers, passer à `--replication-factor 3`.
 
-Les commandes équivalentes en ligne de commande sont documentées dans la section 16 (Lancer depuis zéro) pour référence.
+Les commandes équivalentes en ligne de commande sont documentées dans la section 20 (Lancer depuis zéro) pour référence.
 
 ---
 
@@ -1053,7 +1064,109 @@ priv_escalation — débit faible mais alertes CRITICAL UNAUTHORIZED_DDL immédi
 
 ---
 
-## 17. Bugs rencontrés et leçons apprises
+
+## 17. Pipeline SIEM — Normalisation + Indexation OpenSearch (siem/)
+
+### Contexte
+
+Les pipelines existants (web, sécurité, BDD) produisent chacun leur propre format JSON. Un analyste ne peut pas faire de recherche cross-sources. La Phase 1 SIEM résout ce problème en ajoutant une couche de normalisation et un stockage indexé commun.
+
+### Architecture
+
+    security-alerts  ──┐
+    db-alerts        ──┤──> siem/20_normalizer.py ──> OpenSearch siem-events-YYYY.MM.DD
+    web-logs         ──┘
+
+### OpenSearch
+
+OpenSearch 2.13.0 est ajouté au docker-compose.yml (port 9200, 512 Mo RAM, mode single-node sans TLS pour le training). Les données sont persistées dans un volume nommé opensearch-data.
+
+### Schéma commun (10 champs)
+
+| Champ | Type | Description |
+|---|---|---|
+| @timestamp | datetime | Horodatage ISO 8601 |
+| source_type | keyword | web / security / db |
+| severity | keyword | CRITICAL / HIGH / MEDIUM / LOW / INFO |
+| rule | keyword | Règle déclenchée |
+| description | text | Description lisible |
+| ip_source | ip | Adresse IP concernée |
+| user | keyword | Utilisateur concerné |
+| host | keyword | Hôte concerné |
+| tags | keyword[] | Labels libres |
+| raw | object | Event original complet |
+
+### siem/20_normalizer.py
+
+Consomme les 3 topics simultanément, mappe chaque format source vers le schéma commun, indexe dans un index partitionné par jour (siem-events-YYYY.MM.DD). Les requêtes HTTP normales (2xx/3xx) sont filtrées — seules les anomalies sont indexées.
+
+### Concepts clés
+
+Index par jour — même pattern qu'en production dans les stacks Wazuh ou Elastic SIEM. Permet de définir des politiques de rétention par date (chaud/tiède/froid) sans modifier le code.
+
+Filtrage à l'indexation — indexer toutes les requêtes HTTP ferait exploser le volume. On n'indexe que les status >= 400, ce qui réduit le volume d'un facteur ~8 tout en conservant les signaux utiles.
+
+### Résultats observés
+
+Sur un cycle de génération active : 646 documents indexés en quelques minutes, répartis entre source_type=web (erreurs HTTP) et source_type=security (alertes détectées). L'agrégation par sévérité confirme la distribution attendue : MEDIUM majoritaire, CRITICAL rare.
+
+### Lancer
+
+    docker compose up -d opensearch
+    python siem/20_normalizer.py   # à lancer en parallèle des pipelines existants
+
+---
+
+## 18. Pipeline SIEM — Corrélation cross-sources (siem/)
+
+### Contexte
+
+La normalisation (Phase 1) permet de voir tous les events au même endroit. La corrélation (Phase 2) exploite cette vue unifiée pour détecter des enchaînements d'événements qui, pris isolément, sont suspects mais pas critiques — et qui ensemble constituent une chaîne d'attaque confirmée.
+
+### Architecture
+
+    OpenSearch siem-events-*
+           |
+           | requête toutes les 60s
+           v
+    siem/21_correlator.py ──> topic: corr-alerts ──> siem/22_corr_consumer.py
+
+Le correlator lit OpenSearch (pas Kafka directement) pour pouvoir raisonner sur l'historique des dernières minutes et croiser des sources différentes.
+
+### Règles de corrélation
+
+| Règle | Sources | Fenêtre | Condition | Sévérité |
+|---|---|---|---|---|
+| RECON_TO_EXFIL | security + db | 5 min | scan web SUSPICIOUS_PATH + dump BDD TABLE_DUMP coexistent | CRITICAL |
+| MULTI_SOURCE_CRITICAL | security + db | 2 min | alertes CRITICAL simultanées sur les deux sources | CRITICAL |
+| SUSTAINED_ATTACK | security | 3 min | même IP déclenche 3+ règles distinctes HIGH/CRITICAL | HIGH |
+
+### Résultat observé en live
+
+MULTI_SOURCE_CRITICAL s'est déclenchée lors du premier test : HIGH_REQUEST_RATE (brute force web sur 193.32.162.10) + TABLE_DUMP (dump BDD par attacker) dans la même fenêtre de 2 minutes. Chaîne de preuves affichée dans la console investigation avec timestamps, source, sévérité et règle pour chaque event.
+
+### Concepts clés
+
+Corrélation temporelle — deux events isolés deviennent un incident quand ils coexistent dans une fenêtre de temps. C'est le principe fondamental des SIEM comme Splunk ou Elastic Security.
+
+Preuve vs alerte — le consumer 22_corr_consumer.py n'affiche pas juste une alerte : il affiche la chaîne des events qui l'ont déclenchée. C'est ce qu'un analyste SOC voit lors d'une investigation, pas juste un message d'erreur.
+
+Faux positif maîtrisé — MULTI_SOURCE_CRITICAL exige deux sources distinctes. Un CRITICAL isolé (brute force seul, ou dump BDD seul) ne suffit pas. La corrélation réduit le bruit par définition.
+
+### Lancer
+
+    bash siem/19_setup.sh                  # créer le topic corr-alerts
+    python siem/22_corr_consumer.py        # Terminal 1 — console investigation
+    python siem/21_correlator.py           # Terminal 2 — moteur de corrélation
+    python siem/20_normalizer.py           # Terminal 3 — normalisation
+    python log/11_log_processor.py         # Terminal 4 — détection web
+    python db/18_db_monitor.py             # Terminal 5 — détection BDD
+    python db/17_db_simulator.py           # Terminal 6 — simulation BDD
+    python log/13_live_generator.py        # Terminal 7 — génération trafic
+
+---
+
+## 19. Bugs rencontrés et leçons apprises
 
 ### 15.1 KAFKA_OPTS hérité dans docker exec
 
@@ -1182,7 +1295,7 @@ curl -s http://admin:admin@localhost:3000/api/datasources \
 
 ---
 
-## 18. Lancer le projet depuis zéro
+## 20. Lancer le projet depuis zéro
 
 ### Stack Docker
 
@@ -1263,6 +1376,33 @@ python log/13_live_generator.py   # terminal 3
 # Les scénarios d'attaque se déclenchent automatiquement toutes les ~15-45s
 ```
 
+### Pipeline SIEM complet (siem/)
+
+Prérequis : stack Docker démarrée avec OpenSearch, et pipelines log + db opérationnels.
+
+```bash
+# Démarrer OpenSearch si pas encore fait
+docker compose up -d opensearch
+
+# Créer le topic corr-alerts
+bash siem/19_setup.sh
+
+# Activer le venv
+source .venv/bin/activate
+
+# Lancer dans 7 terminaux (ordre important)
+python siem/22_corr_consumer.py   # T1 — console investigation
+python siem/21_correlator.py      # T2 — corrélation cross-sources
+python siem/20_normalizer.py      # T3 — normalisation -> OpenSearch
+python log/11_log_processor.py    # T4 — détection web
+python db/18_db_monitor.py        # T5 — détection BDD
+python db/17_db_simulator.py      # T6 — simulation BDD
+python log/13_live_generator.py   # T7 — génération trafic
+
+# Vérifier le contenu OpenSearch
+curl -s http://localhost:9200/siem-events-$(date +%Y.%m.%d)/_count
+```
+
 ### Interfaces web
 
 | Interface | URL | Credentials |
@@ -1272,3 +1412,6 @@ python log/13_live_generator.py   # terminal 3
 | Grafana | http://localhost:3000 | admin / admin |
 | Dashboard Kafka | http://localhost:3000/dashboards | Dashboards > Kafka > Kafka — Vue d'ensemble |
 | Dashboard SOC | http://localhost:3000/dashboards | Dashboards > Kafka > SOC — Détection Sécurité |
+| Dashboard DLP | http://localhost:3000/dashboards | Dashboards > Kafka > DLP — Surveillance Base de Données |
+| OpenSearch API | http://localhost:9200 | aucun (désactivé pour training) |
+| OpenSearch index | http://localhost:9200/siem-events-*/_count | comptage documents indexés |
